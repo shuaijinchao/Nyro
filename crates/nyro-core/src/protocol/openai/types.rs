@@ -23,7 +23,7 @@ pub struct OpenAIRequest {
 pub struct OpenAIMessage {
     pub role: String,
     pub content: Option<OpenAIContent>,
-    pub tool_calls: Option<Vec<Value>>,
+    pub tool_calls: Option<Vec<OpenAIToolCall>>,
     pub tool_call_id: Option<String>,
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
@@ -49,4 +49,18 @@ pub enum OpenAIContentPart {
 pub struct ImageUrl {
     pub url: String,
     pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct OpenAIToolCall {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub call_type: Option<String>,
+    pub function: OpenAIFunctionCall,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct OpenAIFunctionCall {
+    pub name: String,
+    pub arguments: String,
 }

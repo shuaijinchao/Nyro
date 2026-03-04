@@ -26,6 +26,9 @@ impl ProxyClient {
                     HeaderValue::from_static("2023-06-01"),
                 );
             }
+            Protocol::Gemini => {
+                // Gemini uses ?key= query param, handled in URL construction
+            }
             _ => {
                 let val = format!("Bearer {api_key}");
                 if let Ok(v) = HeaderValue::from_str(&val) {
@@ -36,6 +39,21 @@ impl ProxyClient {
         headers
     }
 
+    fn build_url(base_url: &str, path: &str, protocol: Protocol, api_key: &str) -> String {
+        let base = base_url.trim_end_matches('/');
+        let url = format!("{base}{path}");
+        match protocol {
+            Protocol::Gemini => {
+                if url.contains('?') {
+                    format!("{url}&key={api_key}")
+                } else {
+                    format!("{url}?key={api_key}")
+                }
+            }
+            _ => url,
+        }
+    }
+
     pub async fn call_non_stream(
         &self,
         base_url: &str,
@@ -43,18 +61,13 @@ impl ProxyClient {
         api_key: &str,
         protocol: Protocol,
         body: Value,
+        extra_headers: HeaderMap,
     ) -> Result<(Value, u16)> {
-        let url = format!("{}{}", base_url.trim_end_matches('/'), path);
-        let headers = Self::build_auth_headers(protocol, api_key);
+        let url = Self::build_url(base_url, path, protocol, api_key);
+        let mut headers = Self::build_auth_headers(protocol, api_key);
+        headers.extend(extra_headers);
 
-        let resp = self
-            .http
-            .post(&url)
-            .headers(headers)
-            .json(&body)
-            .send()
-            .await?;
-
+        let resp = self.http.post(&url).headers(headers).json(&body).send().await?;
         let status = resp.status().as_u16();
         let json: Value = resp.json().await?;
         Ok((json, status))
@@ -67,18 +80,13 @@ impl ProxyClient {
         api_key: &str,
         protocol: Protocol,
         body: Value,
+        extra_headers: HeaderMap,
     ) -> Result<(reqwest::Response, u16)> {
-        let url = format!("{}{}", base_url.trim_end_matches('/'), path);
-        let headers = Self::build_auth_headers(protocol, api_key);
+        let url = Self::build_url(base_url, path, protocol, api_key);
+        let mut headers = Self::build_auth_headers(protocol, api_key);
+        headers.extend(extra_headers);
 
-        let resp = self
-            .http
-            .post(&url)
-            .headers(headers)
-            .json(&body)
-            .send()
-            .await?;
-
+        let resp = self.http.post(&url).headers(headers).json(&body).send().await?;
         let status = resp.status().as_u16();
         Ok((resp, status))
     }

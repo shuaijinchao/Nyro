@@ -32,14 +32,30 @@ impl RouteCache {
 }
 
 pub fn match_route<'a>(routes: &'a [Route], model: &str) -> Option<&'a Route> {
-    routes
-        .iter()
-        .find(|r| pattern_matches(&r.match_pattern, model))
+    let mut best: Option<(u8, &'a Route)> = None;
+
+    for route in routes {
+        let score = match_score(&route.match_pattern, model);
+        if score == 0 {
+            continue;
+        }
+        if best.is_none() || score > best.unwrap().0 {
+            best = Some((score, route));
+        }
+    }
+
+    best.map(|(_, r)| r)
 }
 
-fn pattern_matches(pattern: &str, model: &str) -> bool {
-    if pattern == "*" {
-        return true;
+fn match_score(pattern: &str, model: &str) -> u8 {
+    if pattern == model {
+        return 3; // exact
     }
-    glob_match::glob_match(pattern, model)
+    if pattern != "*" && glob_match::glob_match(pattern, model) {
+        return 2; // glob
+    }
+    if pattern == "*" {
+        return 1; // wildcard
+    }
+    0
 }

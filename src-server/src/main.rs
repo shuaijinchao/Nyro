@@ -55,8 +55,14 @@ async fn main() -> anyhow::Result<()> {
     });
 
     let admin_router = admin_routes::create_router(gateway, args.admin_key);
-    let webui_service = tower_http::services::ServeDir::new(&args.webui_dir);
-    let app = admin_router.fallback_service(webui_service);
+
+    let index_path = std::path::Path::new(&args.webui_dir).join("index.html");
+    let webui_service = tower_http::services::ServeDir::new(&args.webui_dir)
+        .fallback(tower_http::services::ServeFile::new(index_path));
+
+    let app = admin_router
+        .fallback_service(webui_service)
+        .layer(tower_http::cors::CorsLayer::permissive());
 
     let admin_addr = format!("0.0.0.0:{}", args.admin_port);
     let listener = tokio::net::TcpListener::bind(&admin_addr).await?;

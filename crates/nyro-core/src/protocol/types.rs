@@ -5,6 +5,8 @@ use serde_json::Value;
 
 use super::Protocol;
 
+// ── Ingress: client request → internal ──
+
 #[derive(Debug, Clone)]
 pub struct InternalRequest {
     pub messages: Vec<InternalMessage>,
@@ -13,7 +15,7 @@ pub struct InternalRequest {
     pub temperature: Option<f64>,
     pub max_tokens: Option<u32>,
     pub top_p: Option<f64>,
-    pub tools: Option<Vec<Value>>,
+    pub tools: Option<Vec<ToolDef>>,
     pub tool_choice: Option<Value>,
     pub source_protocol: Protocol,
     pub extra: HashMap<String, Value>,
@@ -23,7 +25,7 @@ pub struct InternalRequest {
 pub struct InternalMessage {
     pub role: Role,
     pub content: MessageContent,
-    pub tool_calls: Option<Vec<Value>>,
+    pub tool_calls: Option<Vec<ToolCall>>,
     pub tool_call_id: Option<String>,
 }
 
@@ -40,6 +42,22 @@ pub enum Role {
 pub enum MessageContent {
     Text(String),
     Blocks(Vec<ContentBlock>),
+}
+
+impl MessageContent {
+    pub fn as_text(&self) -> String {
+        match self {
+            MessageContent::Text(t) => t.clone(),
+            MessageContent::Blocks(blocks) => blocks
+                .iter()
+                .filter_map(|b| match b {
+                    ContentBlock::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(""),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -67,8 +85,46 @@ pub struct ImageSource {
     pub data: String,
 }
 
+// ── Egress: internal → upstream response ──
+
 #[derive(Debug, Clone, Default)]
 pub struct TokenUsage {
     pub input_tokens: u32,
     pub output_tokens: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct InternalResponse {
+    pub id: String,
+    pub model: String,
+    pub content: String,
+    pub tool_calls: Vec<ToolCall>,
+    pub stop_reason: Option<String>,
+    pub usage: TokenUsage,
+}
+
+#[derive(Debug, Clone)]
+pub struct ToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ToolDef {
+    pub name: String,
+    pub description: Option<String>,
+    pub parameters: Value,
+}
+
+// ── Streaming ──
+
+#[derive(Debug, Clone)]
+pub enum StreamDelta {
+    MessageStart { id: String, model: String },
+    TextDelta(String),
+    ToolCallStart { index: usize, id: String, name: String },
+    ToolCallDelta { index: usize, arguments: String },
+    Usage(TokenUsage),
+    Done { stop_reason: String },
 }

@@ -2,16 +2,13 @@ use anyhow::Result;
 use reqwest::header::HeaderMap;
 use serde_json::Value;
 
-use crate::protocol::EgressEncoder;
 use crate::protocol::types::*;
+use crate::protocol::EgressEncoder;
 
 pub struct OpenAIEncoder;
 
 impl EgressEncoder for OpenAIEncoder {
-    fn encode_request(
-        &self,
-        req: &InternalRequest,
-    ) -> Result<(Value, HeaderMap)> {
+    fn encode_request(&self, req: &InternalRequest) -> Result<(Value, HeaderMap)> {
         let messages: Vec<Value> = req
             .messages
             .iter()
@@ -35,8 +32,22 @@ impl EgressEncoder for OpenAIEncoder {
         if let Some(p) = req.top_p {
             obj.insert("top_p".into(), p.into());
         }
+
         if let Some(ref tools) = req.tools {
-            obj.insert("tools".into(), Value::Array(tools.clone()));
+            let tools_val: Vec<Value> = tools
+                .iter()
+                .map(|t| {
+                    serde_json::json!({
+                        "type": "function",
+                        "function": {
+                            "name": t.name,
+                            "description": t.description,
+                            "parameters": t.parameters,
+                        }
+                    })
+                })
+                .collect();
+            obj.insert("tools".into(), Value::Array(tools_val));
         }
         if let Some(ref tc) = req.tool_choice {
             obj.insert("tool_choice".into(), tc.clone());
@@ -54,6 +65,10 @@ impl EgressEncoder for OpenAIEncoder {
         }
 
         Ok((body, HeaderMap::new()))
+    }
+
+    fn egress_path(&self, _model: &str, _stream: bool) -> String {
+        "/v1/chat/completions".to_string()
     }
 }
 
@@ -82,7 +97,7 @@ fn encode_message(msg: &InternalMessage) -> Result<Value> {
                     ContentBlock::Image { source } => {
                         serde_json::json!({
                             "type": "image_url",
-                            "image_url": {"url": source.data}
+                            "image_url": {"url": &source.data}
                         })
                     }
                     ContentBlock::ToolUse { id, name, input } => {
@@ -92,10 +107,7 @@ fn encode_message(msg: &InternalMessage) -> Result<Value> {
                             "function": {"name": name, "arguments": input.to_string()}
                         })
                     }
-                    ContentBlock::ToolResult {
-                        tool_use_id,
-                        content,
-                    } => {
+                    ContentBlock::ToolResult { tool_use_id, content } => {
                         serde_json::json!({
                             "type": "text",
                             "text": content.to_string(),
@@ -108,16 +120,25 @@ fn encode_message(msg: &InternalMessage) -> Result<Value> {
         }
     }
 
-    if let Some(ref tc) = msg.tool_calls {
-        map.insert("tool_calls".into(), Value::Array(tc.clone()));
+    if let Some(ref tcs) = msg.tool_calls {
+        let arr: Vec<Value> = tcs
+            .iter()
+            .map(|tc| {
+                serde_json::json!({
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.name,
+                        "arguments": tc.arguments,
+                    }
+                })
+            })
+            .collect();
+        map.insert("tool_calls".into(), Value::Array(arr));
     }
     if let Some(ref tid) = msg.tool_call_id {
         map.insert("tool_call_id".into(), Value::String(tid.clone()));
     }
 
     Ok(obj)
-}
-
-pub fn egress_path() -> &'static str {
-    "/v1/chat/completions"
 }

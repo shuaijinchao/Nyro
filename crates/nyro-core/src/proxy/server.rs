@@ -11,6 +11,11 @@ use crate::Gateway;
 pub fn create_router(gateway: Gateway) -> Router {
     let mut router = Router::new()
         .route("/v1/chat/completions", post(handler::openai_proxy))
+        .route("/v1/messages", post(handler::anthropic_proxy))
+        .route(
+            "/v1beta/models/:model_action",
+            post(handler::gemini_proxy),
+        )
         .route("/health", get(health));
 
     if let Some(ref key) = gateway.config.auth_key {
