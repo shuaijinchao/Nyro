@@ -7,32 +7,24 @@ use nyro_core::Gateway;
 use serde::Deserialize;
 
 pub fn create_router(gateway: Gateway, _admin_key: Option<String>) -> Router {
+    let providers_item = get(get_provider_handler)
+        .put(update_provider_handler)
+        .delete(delete_provider_handler);
+
+    let routes_item = put(update_route_handler).delete(delete_route_handler);
+
     let api = Router::new()
-        // Providers
         .route("/providers", get(list_providers).post(create_provider_handler))
-        .route(
-            "/providers/{id}",
-            get(get_provider_handler)
-                .put(update_provider_handler)
-                .delete(delete_provider_handler),
-        )
-        .route("/providers/{id}/test", get(test_provider_handler))
-        // Routes
+        .route("/providers/:id", providers_item)
+        .route("/providers/:id/test", get(test_provider_handler))
         .route("/routes", get(list_routes_handler).post(create_route_handler))
-        .route(
-            "/routes/{id}",
-            put(update_route_handler).delete(delete_route_handler),
-        )
-        // Logs
+        .route("/routes/:id", routes_item)
         .route("/logs", get(query_logs_handler))
-        // Stats
         .route("/stats/overview", get(stats_overview))
         .route("/stats/hourly", get(stats_hourly))
         .route("/stats/models", get(stats_by_model))
         .route("/stats/providers", get(stats_by_provider))
-        // Settings
-        .route("/settings/{key}", get(get_setting).put(set_setting))
-        // Status
+        .route("/settings/:key", get(get_setting).put(set_setting))
         .route("/status", get(get_status))
         .with_state(gateway);
 

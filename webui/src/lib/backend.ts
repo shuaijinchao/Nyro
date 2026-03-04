@@ -7,16 +7,19 @@ async function invokeIPC<T>(cmd: string, args?: Record<string, unknown>): Promis
 
 async function invokeHTTP<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   const mapping = resolveHTTP(cmd, args);
-  const resp = await fetch(mapping.url, {
-    method: mapping.method,
-    headers: { "Content-Type": "application/json" },
-    body: mapping.body ? JSON.stringify(mapping.body) : undefined,
-  });
+  const init: RequestInit = { method: mapping.method };
+  if (mapping.body) {
+    init.headers = { "Content-Type": "application/json" };
+    init.body = JSON.stringify(mapping.body);
+  }
+  const resp = await fetch(mapping.url, init);
   if (!resp.ok) {
     const body = await resp.json().catch(() => ({}));
     throw new Error(body.error || `HTTP ${resp.status}`);
   }
-  const json = await resp.json();
+  const text = await resp.text();
+  if (!text) return {} as T;
+  const json = JSON.parse(text);
   return json.data ?? json;
 }
 
