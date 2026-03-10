@@ -74,23 +74,43 @@ Nyro 提供两种形态：
 
 ## 安装
 
-### 桌面应用
+### 桌面应用 — 一键安装（推荐）
 
-从 [Releases](https://github.com/shuaijinchao/nyro/releases/latest) 下载对应平台的安装包：
+**macOS / Linux**：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/shuaijinchao/nyro/master/scripts/install/install.sh | bash
+```
+
+**Windows**（PowerShell）：
+
+```powershell
+irm https://raw.githubusercontent.com/shuaijinchao/nyro/master/scripts/install/install.ps1 | iex
+```
+
+脚本会自动检测平台、下载最新版本并完成安装。macOS 上会自动移除隔离属性，避免"应用已损坏"提示。
+
+> 指定版本：`VERSION=1.0.0 bash install.sh` 或在 PowerShell 中先设置 `$Version = "1.0.0"`。
+
+### 桌面应用 — 手动下载
+
+从 [Releases](https://github.com/shuaijinchao/nyro/releases/latest) 下载对应平台安装包：
 
 | 平台 | 文件 |
 |---|---|
 | macOS（Apple Silicon） | `Nyro_*_aarch64.dmg` |
 | macOS（Intel） | `Nyro_*_x86_64.dmg` |
 | Windows | `Nyro_*_x64-setup.exe` |
-| Linux | `Nyro_*_amd64.AppImage` |
+| Linux（deb） | `Nyro_*_amd64.deb` |
+| Linux（AppImage） | `Nyro_*_amd64.AppImage` |
 
-> **macOS / Windows 提示**：应用未进行平台签名/公证。macOS 首次打开请右键 → 打开；Windows 在 SmartScreen 提示中点击「更多信息」→「仍要运行」。
+> **macOS 提示**：应用未经公证，手动安装后请执行 `sudo xattr -rd com.apple.quarantine /Applications/Nyro.app`，或使用上方一键脚本。
+>
+> **Windows 提示**：SmartScreen 可能提示"未知发布者"，点击「更多信息」→「仍要运行」即可。
 
 ### 服务端二进制
 
 ```bash
-# 下载对应平台的二进制
 curl -LO https://github.com/shuaijinchao/nyro/releases/latest/download/nyro-server-linux-x86_64
 
 chmod +x nyro-server-linux-x86_64

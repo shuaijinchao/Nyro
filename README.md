@@ -74,23 +74,43 @@ Nyro ships in two forms:
 
 ## Installation
 
-### Desktop App
+### Desktop App — Quick Install (Recommended)
 
-Download the latest installer for your platform from [Releases](https://github.com/shuaijinchao/nyro/releases/latest):
+**macOS / Linux**:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/shuaijinchao/nyro/master/scripts/install/install.sh | bash
+```
+
+**Windows** (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/shuaijinchao/nyro/master/scripts/install/install.ps1 | iex
+```
+
+The script auto-detects your platform, downloads the latest release, installs it, and on macOS removes the quarantine attribute to prevent the "app is damaged" dialog.
+
+> Specify a version: `VERSION=1.0.0 bash install.sh` or `$Version = "1.0.0"` before the PowerShell command.
+
+### Desktop App — Manual Download
+
+Download installers directly from [Releases](https://github.com/shuaijinchao/nyro/releases/latest):
 
 | Platform | File |
 |---|---|
 | macOS (Apple Silicon) | `Nyro_*_aarch64.dmg` |
 | macOS (Intel) | `Nyro_*_x86_64.dmg` |
 | Windows | `Nyro_*_x64-setup.exe` |
-| Linux | `Nyro_*_amd64.AppImage` |
+| Linux (deb) | `Nyro_*_amd64.deb` |
+| Linux (AppImage) | `Nyro_*_amd64.AppImage` |
 
-> **macOS / Windows note**: The app is not platform-signed. On macOS, right-click → Open on first launch. On Windows, click "More info" → "Run anyway" in SmartScreen.
+> **macOS note**: The app is not notarized. After manual install run `sudo xattr -rd com.apple.quarantine /Applications/Nyro.app` or use the install script above.
+>
+> **Windows note**: SmartScreen may show "Unknown publisher" — click "More info" → "Run anyway".
 
 ### Server Binary
 
 ```bash
-# Download for your platform
 curl -LO https://github.com/shuaijinchao/nyro/releases/latest/download/nyro-server-linux-x86_64
 
 chmod +x nyro-server-linux-x86_64
