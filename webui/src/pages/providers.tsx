@@ -14,6 +14,8 @@ import {
   X,
   ChevronLeft,
   ChevronRight,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import { useLocale } from "@/lib/i18n";
 import { ProviderIcon } from "@/components/ui/provider-icon";
@@ -370,6 +372,8 @@ export default function ProvidersPage() {
   const [testingId, setTestingId] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<Record<string, TestResult>>({});
   const [selectedPresetId, setSelectedPresetId] = useState(DEFAULT_PRESET_ID);
+  const [showCreateApiKey, setShowCreateApiKey] = useState(false);
+  const [showEditApiKey, setShowEditApiKey] = useState(false);
 
   const { data: providers = [], isLoading } = useQuery<Provider[]>({
     queryKey: ["providers"],
@@ -439,6 +443,7 @@ export default function ProvidersPage() {
 
   function startEdit(p: Provider) {
     setEditingId(p.id);
+    setShowEditApiKey(false);
     setEditForm({
       id: p.id,
       name: p.name,
@@ -448,7 +453,7 @@ export default function ProvidersPage() {
       channel: p.channel || "default",
       models_endpoint: p.models_endpoint ?? "",
       static_models: p.static_models ?? "",
-      api_key: "",
+      api_key: p.api_key ?? "",
     });
   }
 
@@ -530,6 +535,7 @@ export default function ProvidersPage() {
 
   function closeCreateForm() {
     setShowForm(false);
+    setShowCreateApiKey(false);
     setSelectedPresetId(DEFAULT_PRESET_ID);
     setForm(emptyCreate);
   }
@@ -739,14 +745,25 @@ export default function ProvidersPage() {
                   onChange={(e) => setForm({ ...form, models_endpoint: e.target.value })}
                 />
               </div>
-              <div className="col-span-2 space-y-2">
+              <div className="space-y-2">
                 <FieldLabel>API Key</FieldLabel>
-                <Input
-                  placeholder="sk-..."
-                  type="password"
-                  value={form.api_key}
-                  onChange={(e) => setForm({ ...form, api_key: e.target.value })}
-                />
+                <div className="relative">
+                  <Input
+                    placeholder="sk-..."
+                    type={showCreateApiKey ? "text" : "password"}
+                    value={form.api_key}
+                    className="pr-10"
+                    onChange={(e) => setForm({ ...form, api_key: e.target.value })}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowCreateApiKey((prev) => !prev)}
+                    className="absolute top-1/2 right-3 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                    aria-label={showCreateApiKey ? (isZh ? "隐藏 API Key" : "Hide API key") : (isZh ? "显示 API Key" : "Show API key")}
+                  >
+                    {showCreateApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
               </div>
             </div>
             <div className="flex gap-3">
@@ -949,14 +966,25 @@ export default function ProvidersPage() {
                         onChange={(e) => setEditForm({ ...editForm, models_endpoint: e.target.value })}
                       />
                     </div>
-                    <div className="col-span-2 space-y-2">
+                    <div className="space-y-2">
                       <FieldLabel>{isZh ? "API Key" : "API Key"}</FieldLabel>
-                      <Input
-                        placeholder={isZh ? "留空则保持不变" : "Leave empty to keep current"}
-                        type="password"
-                        value={editForm.api_key ?? ""}
-                        onChange={(e) => setEditForm({ ...editForm, api_key: e.target.value })}
-                      />
+                      <div className="relative">
+                        <Input
+                          placeholder="sk-..."
+                          type={showEditApiKey ? "text" : "password"}
+                          value={editForm.api_key ?? ""}
+                          className="pr-10"
+                          onChange={(e) => setEditForm({ ...editForm, api_key: e.target.value })}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowEditApiKey((prev) => !prev)}
+                          className="absolute top-1/2 right-3 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                          aria-label={showEditApiKey ? (isZh ? "隐藏 API Key" : "Hide API key") : (isZh ? "显示 API Key" : "Show API key")}
+                        >
+                          {showEditApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </button>
+                      </div>
                     </div>
                   </div>
                   <div className="flex gap-3">
@@ -1002,16 +1030,14 @@ export default function ProvidersPage() {
                         name={p.name}
                         protocol={p.protocol}
                         baseUrl={p.base_url}
-                        size={40}
-                        fill
+                        size={34}
                         className="provider-preset-icon provider-preset-icon-colored rounded-xl border border-slate-300/70 bg-transparent"
                       />
                       <ProviderIcon
                         name={p.name}
                         protocol={p.protocol}
                         baseUrl={p.base_url}
-                        size={40}
-                        fill
+                        size={34}
                         monochrome
                         className="provider-preset-icon provider-preset-icon-mono rounded-xl border border-slate-300/70 bg-transparent"
                       />

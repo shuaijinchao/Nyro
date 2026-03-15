@@ -298,7 +298,7 @@ impl AdminService {
 
     pub async fn list_api_keys(&self) -> anyhow::Result<Vec<ApiKeyWithBindings>> {
         let rows = sqlx::query_as::<_, ApiKey>(
-            "SELECT id, key, name, rpm, tpm, tpd, status, expires_at, created_at, updated_at FROM api_keys ORDER BY created_at DESC",
+            "SELECT id, key, name, rpm, rpd, tpm, tpd, status, expires_at, created_at, updated_at FROM api_keys ORDER BY created_at DESC",
         )
         .fetch_all(&self.gw.db)
         .await?;
@@ -311,6 +311,7 @@ impl AdminService {
                 key: row.key,
                 name: row.name,
                 rpm: row.rpm,
+                rpd: row.rpd,
                 tpm: row.tpm,
                 tpd: row.tpd,
                 status: row.status,
@@ -325,7 +326,7 @@ impl AdminService {
 
     pub async fn get_api_key(&self, id: &str) -> anyhow::Result<ApiKeyWithBindings> {
         let row = sqlx::query_as::<_, ApiKey>(
-            "SELECT id, key, name, rpm, tpm, tpd, status, expires_at, created_at, updated_at FROM api_keys WHERE id = ?",
+            "SELECT id, key, name, rpm, rpd, tpm, tpd, status, expires_at, created_at, updated_at FROM api_keys WHERE id = ?",
         )
         .bind(id)
         .fetch_one(&self.gw.db)
@@ -336,6 +337,7 @@ impl AdminService {
             key: row.key,
             name: row.name,
             rpm: row.rpm,
+            rpd: row.rpd,
             tpm: row.tpm,
             tpd: row.tpd,
             status: row.status,
@@ -348,16 +350,16 @@ impl AdminService {
 
     pub async fn create_api_key(&self, input: CreateApiKey) -> anyhow::Result<ApiKeyWithBindings> {
         let id = uuid::Uuid::new_v4().to_string();
-        let raw_key = format!("sk-nyro-{}", uuid::Uuid::new_v4().simple());
-        let key = raw_key.chars().take(28).collect::<String>();
+        let key = format!("sk-{}", uuid::Uuid::new_v4().simple());
 
         sqlx::query(
-            "INSERT INTO api_keys (id, key, name, rpm, tpm, tpd, status, expires_at) VALUES (?, ?, ?, ?, ?, ?, 'active', ?)",
+            "INSERT INTO api_keys (id, key, name, rpm, rpd, tpm, tpd, status, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?)",
         )
         .bind(&id)
         .bind(&key)
         .bind(input.name.trim())
         .bind(input.rpm)
+        .bind(input.rpd)
         .bind(input.tpm)
         .bind(input.tpd)
         .bind(input.expires_at.as_ref().map(|v| v.trim()).filter(|v| !v.is_empty()))
@@ -370,7 +372,7 @@ impl AdminService {
 
     pub async fn update_api_key(&self, id: &str, input: UpdateApiKey) -> anyhow::Result<ApiKeyWithBindings> {
         let current = sqlx::query_as::<_, ApiKey>(
-            "SELECT id, key, name, rpm, tpm, tpd, status, expires_at, created_at, updated_at FROM api_keys WHERE id = ?",
+            "SELECT id, key, name, rpm, rpd, tpm, tpd, status, expires_at, created_at, updated_at FROM api_keys WHERE id = ?",
         )
         .bind(id)
         .fetch_one(&self.gw.db)
@@ -378,6 +380,7 @@ impl AdminService {
 
         let name = input.name.unwrap_or(current.name);
         let rpm = input.rpm.or(current.rpm);
+        let rpd = input.rpd.or(current.rpd);
         let tpm = input.tpm.or(current.tpm);
         let tpd = input.tpd.or(current.tpd);
         let status = input.status.unwrap_or(current.status);
@@ -388,10 +391,11 @@ impl AdminService {
         }
 
         sqlx::query(
-            "UPDATE api_keys SET name=?, rpm=?, tpm=?, tpd=?, status=?, expires_at=?, updated_at=datetime('now') WHERE id=?",
+            "UPDATE api_keys SET name=?, rpm=?, rpd=?, tpm=?, tpd=?, status=?, expires_at=?, updated_at=datetime('now') WHERE id=?",
         )
         .bind(name.trim())
         .bind(rpm)
+        .bind(rpd)
         .bind(tpm)
         .bind(tpd)
         .bind(status)
@@ -455,22 +459,43 @@ impl AdminService {
 
     // ── Stats ──
 
-    pub async fn get_stats_overview(&self) -> anyhow::Result<StatsOverview> {
-        let row = sqlx::query_as::<_, StatsOverview>(
-            r#"SELECT
-                COUNT(*) as total_requests,
-                COALESCE(SUM(input_tokens), 0) as total_input_tokens,
-                COALESCE(SUM(output_tokens), 0) as total_output_tokens,
-                COALESCE(AVG(duration_ms), 0) as avg_duration_ms,
-                COALESCE(SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END), 0) as error_count
-            FROM request_logs"#,
-        )
-        .fetch_one(&self.gw.db)
-        .await?;
+    fn normalize_hours(hours: Option<i32>) -> Option<i32> {
+        hours.and_then(|value| (value > 0).then_some(value))
+    }
+
+    pub async fn get_stats_overview(&self, hours: Option<i32>) -> anyhow::Result<StatsOverview> {
+        let row = if let Some(hours) = Self::normalize_hours(hours) {
+            sqlx::query_as::<_, StatsOverview>(
+                r#"SELECT
+                    COUNT(*) as total_requests,
+                    COALESCE(SUM(input_tokens), 0) as total_input_tokens,
+                    COALESCE(SUM(output_tokens), 0) as total_output_tokens,
+                    COALESCE(AVG(duration_ms), 0) as avg_duration_ms,
+                    COALESCE(SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END), 0) as error_count
+                FROM request_logs
+                WHERE created_at >= datetime('now', ? || ' hours')"#,
+            )
+            .bind(format!("-{hours}"))
+            .fetch_one(&self.gw.db)
+            .await?
+        } else {
+            sqlx::query_as::<_, StatsOverview>(
+                r#"SELECT
+                    COUNT(*) as total_requests,
+                    COALESCE(SUM(input_tokens), 0) as total_input_tokens,
+                    COALESCE(SUM(output_tokens), 0) as total_output_tokens,
+                    COALESCE(AVG(duration_ms), 0) as avg_duration_ms,
+                    COALESCE(SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END), 0) as error_count
+                FROM request_logs"#,
+            )
+            .fetch_one(&self.gw.db)
+            .await?
+        };
         Ok(row)
     }
 
     pub async fn get_stats_hourly(&self, hours: i32) -> anyhow::Result<Vec<StatsHourly>> {
+        let hours = hours.max(1);
         let rows = sqlx::query_as::<_, StatsHourly>(
             r#"SELECT
                 strftime('%Y-%m-%d %H:00', created_at) as hour,
@@ -490,36 +515,74 @@ impl AdminService {
         Ok(rows)
     }
 
-    pub async fn get_stats_by_model(&self) -> anyhow::Result<Vec<ModelStats>> {
-        let rows = sqlx::query_as::<_, ModelStats>(
-            r#"SELECT
-                COALESCE(actual_model, 'unknown') as model,
-                COUNT(*) as request_count,
-                COALESCE(SUM(input_tokens), 0) as total_input_tokens,
-                COALESCE(SUM(output_tokens), 0) as total_output_tokens,
-                COALESCE(AVG(duration_ms), 0) as avg_duration_ms
-            FROM request_logs
-            GROUP BY actual_model
-            ORDER BY request_count DESC"#,
-        )
-        .fetch_all(&self.gw.db)
-        .await?;
+    pub async fn get_stats_by_model(&self, hours: Option<i32>) -> anyhow::Result<Vec<ModelStats>> {
+        let rows = if let Some(hours) = Self::normalize_hours(hours) {
+            sqlx::query_as::<_, ModelStats>(
+                r#"SELECT
+                    COALESCE(actual_model, 'unknown') as model,
+                    COUNT(*) as request_count,
+                    COALESCE(SUM(input_tokens), 0) as total_input_tokens,
+                    COALESCE(SUM(output_tokens), 0) as total_output_tokens,
+                    COALESCE(AVG(duration_ms), 0) as avg_duration_ms
+                FROM request_logs
+                WHERE created_at >= datetime('now', ? || ' hours')
+                GROUP BY actual_model
+                ORDER BY request_count DESC"#,
+            )
+            .bind(format!("-{hours}"))
+            .fetch_all(&self.gw.db)
+            .await?
+        } else {
+            sqlx::query_as::<_, ModelStats>(
+                r#"SELECT
+                    COALESCE(actual_model, 'unknown') as model,
+                    COUNT(*) as request_count,
+                    COALESCE(SUM(input_tokens), 0) as total_input_tokens,
+                    COALESCE(SUM(output_tokens), 0) as total_output_tokens,
+                    COALESCE(AVG(duration_ms), 0) as avg_duration_ms
+                FROM request_logs
+                GROUP BY actual_model
+                ORDER BY request_count DESC"#,
+            )
+            .fetch_all(&self.gw.db)
+            .await?
+        };
         Ok(rows)
     }
 
-    pub async fn get_stats_by_provider(&self) -> anyhow::Result<Vec<ProviderStats>> {
-        let rows = sqlx::query_as::<_, ProviderStats>(
-            r#"SELECT
-                COALESCE(provider_name, 'unknown') as provider,
-                COUNT(*) as request_count,
-                SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END) as error_count,
-                COALESCE(AVG(duration_ms), 0) as avg_duration_ms
-            FROM request_logs
-            GROUP BY provider_name
-            ORDER BY request_count DESC"#,
-        )
-        .fetch_all(&self.gw.db)
-        .await?;
+    pub async fn get_stats_by_provider(
+        &self,
+        hours: Option<i32>,
+    ) -> anyhow::Result<Vec<ProviderStats>> {
+        let rows = if let Some(hours) = Self::normalize_hours(hours) {
+            sqlx::query_as::<_, ProviderStats>(
+                r#"SELECT
+                    COALESCE(provider_name, 'unknown') as provider,
+                    COUNT(*) as request_count,
+                    SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END) as error_count,
+                    COALESCE(AVG(duration_ms), 0) as avg_duration_ms
+                FROM request_logs
+                WHERE created_at >= datetime('now', ? || ' hours')
+                GROUP BY provider_name
+                ORDER BY request_count DESC"#,
+            )
+            .bind(format!("-{hours}"))
+            .fetch_all(&self.gw.db)
+            .await?
+        } else {
+            sqlx::query_as::<_, ProviderStats>(
+                r#"SELECT
+                    COALESCE(provider_name, 'unknown') as provider,
+                    COUNT(*) as request_count,
+                    SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END) as error_count,
+                    COALESCE(AVG(duration_ms), 0) as avg_duration_ms
+                FROM request_logs
+                GROUP BY provider_name
+                ORDER BY request_count DESC"#,
+            )
+            .fetch_all(&self.gw.db)
+            .await?
+        };
         Ok(rows)
     }
 

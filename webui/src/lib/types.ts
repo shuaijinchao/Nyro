@@ -3,6 +3,7 @@ export interface Provider {
   name: string;
   protocol: string;
   base_url: string;
+  api_key?: string;
   preset_key?: string | null;
   channel?: string | null;
   models_endpoint?: string | null;
@@ -29,6 +30,7 @@ export interface ApiKey {
   key: string;
   name: string;
   rpm?: number | null;
+  rpd?: number | null;
   tpm?: number | null;
   tpd?: number | null;
   status: "active" | "revoked";
@@ -149,6 +151,7 @@ export interface UpdateRoute {
 export interface CreateApiKey {
   name: string;
   rpm?: number;
+  rpd?: number;
   tpm?: number;
   tpd?: number;
   expires_at?: string;
@@ -158,6 +161,7 @@ export interface CreateApiKey {
 export interface UpdateApiKey {
   name?: string;
   rpm?: number;
+  rpd?: number;
   tpm?: number;
   tpd?: number;
   status?: "active" | "revoked";

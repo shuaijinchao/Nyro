@@ -12,6 +12,7 @@ import ApiKeysPage from "@/pages/api-keys";
 import LogsPage from "@/pages/logs";
 import StatsPage from "@/pages/stats";
 import SettingsPage from "@/pages/settings";
+import ConnectPage from "@/pages/connect";
 import { LocaleProvider } from "@/lib/i18n";
 
 import "./index.css";
@@ -40,6 +41,7 @@ createRoot(document.getElementById("root")!).render(
                 <Route path="api-keys" element={<ApiKeysPage />} />
                 <Route path="logs" element={<LogsPage />} />
                 <Route path="stats" element={<StatsPage />} />
+                <Route path="connect" element={<ConnectPage />} />
                 <Route path="settings" element={<SettingsPage />} />
               </Route>
             </Routes>

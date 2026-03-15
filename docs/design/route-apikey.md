@@ -6,7 +6,7 @@ Route 和 API Key 是**独立管理、多对多绑定**的关系：
 
 - 一个 Key 可以访问多个 Route（应用需要调用不同模型）
 - 一个 Route 可以被多个 Key 访问（多应用/团队共用同一路由）
-- Key 未绑定任何 Route 时默认全局生效
+- Key 未绑定任何 Route 时默认拒绝（最小权限）
 
 ```
 API Key ──── (授权绑定) ──── Route
@@ -78,7 +78,7 @@ API Key ──── (授权绑定) ──── Route
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `id` | TEXT PK | UUID |
-| `key` | TEXT UNIQUE | 格式 `sk-nyro-xxxx`，自动生成 |
+| `key` | TEXT UNIQUE | 格式 `sk-<32位hex>`，自动生成 |
 | `name` | TEXT | 可读名称，如 "Frontend App" |
 | `rpm` | INTEGER NULL | Requests Per Minute 限额，NULL = 不限 |
 | `tpm` | INTEGER NULL | Tokens Per Minute 限额，NULL = 不限 |
@@ -128,15 +128,15 @@ key_valid = (status == 'active') AND (expires_at IS NULL OR now < expires_at)
 ### Key 使用示例
 
 ```
-Key: sk-nyro-frontend-app
+Key: sk-7e1167595f02414fa1d74496372910be
   ├── 绑定路由: [prod-smart, dev-cheap]  ← 仅能访问这两条路由
   └── 配额: 60 RPM / 100K TPD
 
-Key: sk-nyro-backend-svc
-  ├── 绑定路由: []                        ← 未绑定，全局生效
+Key: sk-2e60a11d012f4175a52d7f0e2ea2bc88
+  ├── 绑定路由: []                        ← 未绑定，默认拒绝
   └── 配额: 不限 RPM / 500K TPD
 
-Key: sk-nyro-team-a
+Key: sk-bdb2b97e8ec44474aef7e8f389af1a21
   ├── 绑定路由: [team-coding]             ← 仅 team-coding
   └── 配额: 30 RPM / 50K TPD
 ```
@@ -158,7 +158,7 @@ api_key_routes (绑定关系表)
 
 | Key 绑定状态 | 行为 |
 |---|---|
-| 未绑定任何路由 | 全局生效：可访问所有开启了访问控制的路由 |
+| 未绑定任何路由 | 默认拒绝：不可访问任何开启了访问控制的路由 |
 | 绑定了特定路由 | 精准生效：仅可访问绑定列表中的路由 |
 
 ### 管理入口
@@ -182,7 +182,7 @@ api_key_routes (绑定关系表)
    a. 查找 key → 不存在 → 401 invalid key
    b. status != 'active' → 403 key revoked
    c. expires_at < now → 403 key expired
-   d. key 绑定了路由 AND 当前 route 不在绑定列表 → 403 forbidden
+   d. 当前 route 不在 key 绑定列表（包括未绑定任何路由）→ 403 forbidden
    e. 配额检查 (rpm/tpm/tpd) → 任一超限 → 429 rate limited
 6. 执行路由转发 → target_provider + target_model
 ```
@@ -193,8 +193,8 @@ api_key_routes (绑定关系表)
 
 | 优先级 | 来源 | 说明 |
 |---|---|---|
-| 1 | `Authorization: Bearer sk-nyro-xxxx` | OpenAI / Gemini 客户端习惯 |
-| 2 | `x-api-key: sk-nyro-xxxx` | Anthropic 客户端习惯 |
+| 1 | `Authorization: Bearer sk-<32位hex>` | OpenAI / Gemini 客户端习惯 |
+| 2 | `x-api-key: sk-<32位hex>` | Anthropic 客户端习惯 |
 
 ## 六、数据库 DDL
 
@@ -262,7 +262,7 @@ CREATE TABLE IF NOT EXISTS api_key_routes (
 │  TPM 限额      [           ] (留空=不限)    │
 │  TPD 限额      [100000     ]                │
 │                                              │
-│  绑定路由 (不绑定则全局生效)                │
+│  绑定路由 (不绑定则默认拒绝)                │
 │  ┌──────────────────────────────────────┐   │
 │  │  ☑ prod-smart  (openai / gpt-4o)    │   │
 │  │  ☑ dev-cheap   (openai / gpt-4o-mini)│   │
@@ -278,7 +278,7 @@ CREATE TABLE IF NOT EXISTS api_key_routes (
 ```
 ┌─ API Key 详情 ──────────────────────────────┐
 │ 名称:   Frontend App                        │
-│ Key:    sk-nyro-•••••••  [复制] [吊销]      │
+│ Key:    sk-••••••••••••••••••••••••••••••••  [复制] [吊销]      │
 │ 状态:   ● active                            │
 │ 配额:   60 RPM / 100K TPD                   │
 │ 过期:   2026-04-03                          │
@@ -297,5 +297,5 @@ CREATE TABLE IF NOT EXISTS api_key_routes (
 | 路由匹配键 | `match_pattern`（支持 glob/通配符） | `(ingress_protocol, virtual_model)` 精确匹配 |
 | Fallback | `fallback_provider` + `fallback_model` | 移除，后续迭代 |
 | Provider 优先级 | `priority` 字段 | 移除，后续迭代 |
-| 代理鉴权 | Settings 中的全局 `bearer_token` | `sk-nyro-xxxx` Key 体系，按路由粒度控制 |
+| 代理鉴权 | Settings 中的全局 `bearer_token` | `sk-<32位hex>` Key 体系，按路由粒度控制 |
 | 管理 API 鉴权 | 无 | 桌面模式仅监听 127.0.0.1 无需鉴权；Server 模式后续补充 |

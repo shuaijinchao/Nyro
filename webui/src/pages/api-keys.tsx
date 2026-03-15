@@ -48,14 +48,9 @@ function maskApiKey(key: string) {
   return `${key.slice(0, 10)}••••••`;
 }
 
-function toSqlDatetime(value?: string | null) {
-  if (!value) return undefined;
+function formatExpiresText(value: string | null | undefined, isZh: boolean) {
+  if (!value) return isZh ? "永不过期" : "Never";
   return value.replace("T", " ").slice(0, 19);
-}
-
-function fromSqlDatetime(value?: string | null) {
-  if (!value) return "";
-  return value.replace(" ", "T").slice(0, 16);
 }
 
 function resolveExpiresAt(preset: ExpirePreset) {
@@ -74,9 +69,14 @@ function resolveExpiresAt(preset: ExpirePreset) {
   return date.toISOString().slice(0, 19).replace("T", " ");
 }
 
+function digitsOnly(value: string) {
+  return value.replace(/[^\d]/g, "");
+}
+
 type CreateForm = {
   name: string;
   rpm: string;
+  rpd: string;
   tpm: string;
   tpd: string;
   expiresPreset: ExpirePreset;
@@ -85,17 +85,20 @@ type CreateForm = {
 
 type EditForm = {
   id: string;
+  key: string;
   name: string;
+  expires_text: string;
   rpm: string;
+  rpd: string;
   tpm: string;
   tpd: string;
-  expires_at: string;
   route_ids: string[];
 };
 
 const emptyCreate: CreateForm = {
   name: "",
   rpm: "",
+  rpd: "",
   tpm: "",
   tpd: "",
   expiresPreset: "30d",
@@ -113,6 +116,7 @@ export default function ApiKeysPage() {
   const [editForm, setEditForm] = useState<EditForm | null>(null);
   const [page, setPage] = useState(0);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [copiedEditKey, setCopiedEditKey] = useState(false);
   const [createdKey, setCreatedKey] = useState<string | null>(null);
   const [showCreatedDialog, setShowCreatedDialog] = useState(false);
 
@@ -167,13 +171,16 @@ export default function ApiKeysPage() {
 
   function startEdit(item: ApiKey) {
     setEditingId(item.id);
+    setCopiedEditKey(false);
     setEditForm({
       id: item.id,
+      key: item.key,
       name: item.name,
+      expires_text: formatExpiresText(item.expires_at, isZh),
       rpm: item.rpm ? String(item.rpm) : "",
+      rpd: item.rpd ? String(item.rpd) : "",
       tpm: item.tpm ? String(item.tpm) : "",
       tpd: item.tpd ? String(item.tpd) : "",
-      expires_at: fromSqlDatetime(item.expires_at),
       route_ids: item.route_ids ?? [],
     });
   }
@@ -197,6 +204,7 @@ export default function ApiKeysPage() {
           onClick={() => {
             setEditingId(null);
             setEditForm(null);
+            setCopiedEditKey(false);
             setShowForm((v) => !v);
           }}
           className="flex items-center gap-2"
@@ -209,75 +217,117 @@ export default function ApiKeysPage() {
       {showForm && (
         <div className="glass rounded-2xl p-6 space-y-4">
           <h2 className="text-lg font-semibold text-slate-900">{isZh ? "创建 API Key" : "Create API Key"}</h2>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <FieldLabel>{isZh ? "名称" : "Name"}</FieldLabel>
-              <Input
-                value={createForm.name}
-                onChange={(e) => setCreateForm((prev) => ({ ...prev, name: e.target.value }))}
-                placeholder={isZh ? "例如 Frontend App" : "e.g. Frontend App"}
-              />
+          <div className="space-y-5">
+            <div className="space-y-3">
+              <p className="text-sm font-semibold text-slate-700">{isZh ? "1. 基本信息" : "1. Basic Information"}</p>
+              <p className="text-xs text-slate-500">
+                {isZh ? "Key 值会在创建后自动生成。" : "Key value is auto-generated after creation."}
+              </p>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <FieldLabel>{isZh ? "名称" : "Name"}</FieldLabel>
+                  <Input
+                    value={createForm.name}
+                    onChange={(e) => setCreateForm((prev) => ({ ...prev, name: e.target.value }))}
+                    placeholder={isZh ? "例如 Frontend App" : "e.g. Frontend App"}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <FieldLabel>{isZh ? "有效期" : "Validity"}</FieldLabel>
+                  <Select
+                    value={createForm.expiresPreset}
+                    onValueChange={(value: ExpirePreset) =>
+                      setCreateForm((prev) => ({ ...prev, expiresPreset: value }))
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {expirePresetOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {isZh ? option.zh : option.en}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
             </div>
-            <div className="space-y-2">
-              <FieldLabel>{isZh ? "过期时间" : "Expiration"}</FieldLabel>
-              <Select
-                value={createForm.expiresPreset}
-                onValueChange={(value: ExpirePreset) =>
-                  setCreateForm((prev) => ({ ...prev, expiresPreset: value }))
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {expirePresetOptions.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {isZh ? option.zh : option.en}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+
+            <div className="h-px bg-slate-200/70" />
+
+            <div className="space-y-3">
+              <p className="text-sm font-semibold text-slate-700">{isZh ? "2. 访问权限" : "2. Access Permission"}</p>
+              <div className="space-y-2">
+                <FieldLabel>
+                  {isZh
+                    ? "绑定路由（不勾选=不可访问受控路由）"
+                    : "Bind Routes (none = deny on protected routes)"}
+                </FieldLabel>
+                <MultiSelect
+                  options={routeOptions}
+                  values={createForm.route_ids}
+                  placeholder={
+                    isZh ? "选择可访问的受控路由" : "Select protected routes this key can access"
+                  }
+                  searchPlaceholder={isZh ? "搜索路由..." : "Search routes..."}
+                  emptyText={isZh ? "无匹配路由" : "No matching routes"}
+                  onChange={(next) => setCreateForm((prev) => ({ ...prev, route_ids: next }))}
+                />
+              </div>
             </div>
-            <div className="space-y-2">
-              <FieldLabel>RPM</FieldLabel>
-              <Input
-                type="number"
-                min={0}
-                value={createForm.rpm}
-                onChange={(e) => setCreateForm((prev) => ({ ...prev, rpm: e.target.value }))}
-                placeholder={isZh ? "留空=不限" : "Empty = unlimited"}
-              />
-            </div>
-            <div className="space-y-2">
-              <FieldLabel>TPM</FieldLabel>
-              <Input
-                type="number"
-                min={0}
-                value={createForm.tpm}
-                onChange={(e) => setCreateForm((prev) => ({ ...prev, tpm: e.target.value }))}
-                placeholder={isZh ? "留空=不限" : "Empty = unlimited"}
-              />
-            </div>
-            <div className="col-span-2 space-y-2">
-              <FieldLabel>TPD</FieldLabel>
-              <Input
-                type="number"
-                min={0}
-                value={createForm.tpd}
-                onChange={(e) => setCreateForm((prev) => ({ ...prev, tpd: e.target.value }))}
-                placeholder={isZh ? "留空=不限" : "Empty = unlimited"}
-              />
-            </div>
-            <div className="col-span-2 space-y-2">
-              <FieldLabel>{isZh ? "绑定路由（不勾选=全局生效）" : "Bind Routes (none = global access)"}</FieldLabel>
-              <MultiSelect
-                options={routeOptions}
-                values={createForm.route_ids}
-                placeholder={isZh ? "选择绑定路由（为空=全局）" : "Select routes (empty = global)"}
-                searchPlaceholder={isZh ? "搜索路由..." : "Search routes..."}
-                emptyText={isZh ? "无匹配路由" : "No matching routes"}
-                onChange={(next) => setCreateForm((prev) => ({ ...prev, route_ids: next }))}
-              />
+
+            <div className="h-px bg-slate-200/70" />
+
+            <div className="space-y-3">
+              <p className="text-sm font-semibold text-slate-700">{isZh ? "3. 访问限额" : "3. Access Quota"}</p>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <FieldLabel>TPM</FieldLabel>
+                  <Input
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    value={createForm.tpm}
+                    onChange={(e) => setCreateForm((prev) => ({ ...prev, tpm: digitsOnly(e.target.value) }))}
+                    placeholder={isZh ? "留空=不限" : "Empty = unlimited"}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <FieldLabel>TPD</FieldLabel>
+                  <Input
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    value={createForm.tpd}
+                    onChange={(e) => setCreateForm((prev) => ({ ...prev, tpd: digitsOnly(e.target.value) }))}
+                    placeholder={isZh ? "留空=不限" : "Empty = unlimited"}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <FieldLabel>RPM</FieldLabel>
+                  <Input
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    value={createForm.rpm}
+                    onChange={(e) => setCreateForm((prev) => ({ ...prev, rpm: digitsOnly(e.target.value) }))}
+                    placeholder={isZh ? "留空=不限" : "Empty = unlimited"}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <FieldLabel>RPD</FieldLabel>
+                  <Input
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    value={createForm.rpd}
+                    onChange={(e) => setCreateForm((prev) => ({ ...prev, rpd: digitsOnly(e.target.value) }))}
+                    placeholder={isZh ? "留空=不限" : "Empty = unlimited"}
+                  />
+                </div>
+              </div>
             </div>
           </div>
           <div className="flex gap-3">
@@ -286,6 +336,7 @@ export default function ApiKeysPage() {
                 createMut.mutate({
                   name: createForm.name.trim(),
                   rpm: createForm.rpm ? Number.parseInt(createForm.rpm, 10) : undefined,
+                  rpd: createForm.rpd ? Number.parseInt(createForm.rpd, 10) : undefined,
                   tpm: createForm.tpm ? Number.parseInt(createForm.tpm, 10) : undefined,
                   tpd: createForm.tpd ? Number.parseInt(createForm.tpd, 10) : undefined,
                   expires_at: resolveExpiresAt(createForm.expiresPreset),
@@ -329,69 +380,131 @@ export default function ApiKeysPage() {
                       onClick={() => {
                         setEditingId(null);
                         setEditForm(null);
+                        setCopiedEditKey(false);
                       }}
                       className="cursor-pointer p-1 text-slate-400 hover:text-slate-600"
                     >
                       <X className="h-4 w-4" />
                     </button>
                   </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <FieldLabel>{isZh ? "名称" : "Name"}</FieldLabel>
-                      <Input
-                        value={editForm.name}
-                        onChange={(e) => setEditForm((prev) => (prev ? { ...prev, name: e.target.value } : prev))}
-                      />
+                  <div className="space-y-5">
+                    <div className="space-y-3">
+                      <p className="text-sm font-semibold text-slate-700">{isZh ? "1. 基本信息" : "1. Basic Information"}</p>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <FieldLabel>{isZh ? "名称" : "Name"}</FieldLabel>
+                          <Input
+                            value={editForm.name}
+                            onChange={(e) => setEditForm((prev) => (prev ? { ...prev, name: e.target.value } : prev))}
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <FieldLabel>{isZh ? "有效期" : "Validity"}</FieldLabel>
+                          <Input value={editForm.expires_text} disabled />
+                        </div>
+                        <div className="space-y-2">
+                          <FieldLabel>{isZh ? "Key 值" : "Key Value"}</FieldLabel>
+                          <div className="relative">
+                            <Input value={editForm.key} disabled className="pr-10" />
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                await navigator.clipboard.writeText(editForm.key);
+                                setCopiedEditKey(true);
+                                setTimeout(() => setCopiedEditKey(false), 1200);
+                              }}
+                              className="absolute top-1/2 right-3 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                              title={isZh ? "复制 Key" : "Copy Key"}
+                            >
+                              <Copy className="h-4 w-4" />
+                            </button>
+                          </div>
+                          {copiedEditKey && (
+                            <p className="text-xs text-green-600">{isZh ? "已复制" : "Copied"}</p>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                    <div className="space-y-2">
-                      <FieldLabel>RPM</FieldLabel>
-                      <Input
-                        type="number"
-                        min={0}
-                        value={editForm.rpm}
-                        onChange={(e) => setEditForm((prev) => (prev ? { ...prev, rpm: e.target.value } : prev))}
-                      />
+
+                    <div className="h-px bg-slate-200/70" />
+
+                    <div className="space-y-3">
+                      <p className="text-sm font-semibold text-slate-700">{isZh ? "2. 访问权限" : "2. Access Permission"}</p>
+                      <div className="space-y-2">
+                        <FieldLabel>
+                          {isZh
+                            ? "绑定路由（不勾选=不可访问受控路由）"
+                            : "Bind Routes (none = deny on protected routes)"}
+                        </FieldLabel>
+                        <MultiSelect
+                          options={routeOptions}
+                          values={editForm.route_ids}
+                          placeholder={
+                            isZh ? "选择可访问的受控路由" : "Select protected routes this key can access"
+                          }
+                          searchPlaceholder={isZh ? "搜索路由..." : "Search routes..."}
+                          emptyText={isZh ? "无匹配路由" : "No matching routes"}
+                          onChange={(next) =>
+                            setEditForm((prev) => (prev ? { ...prev, route_ids: next } : prev))
+                          }
+                        />
+                      </div>
                     </div>
-                    <div className="space-y-2">
-                      <FieldLabel>TPM</FieldLabel>
-                      <Input
-                        type="number"
-                        min={0}
-                        value={editForm.tpm}
-                        onChange={(e) => setEditForm((prev) => (prev ? { ...prev, tpm: e.target.value } : prev))}
-                      />
-                    </div>
-                    <div className="col-span-2 space-y-2">
-                      <FieldLabel>TPD</FieldLabel>
-                      <Input
-                        type="number"
-                        min={0}
-                        value={editForm.tpd}
-                        onChange={(e) => setEditForm((prev) => (prev ? { ...prev, tpd: e.target.value } : prev))}
-                      />
-                    </div>
-                    <div className="col-span-2 space-y-2">
-                      <FieldLabel>{isZh ? "过期时间（留空=永不过期）" : "Expires At (empty = never)"}</FieldLabel>
-                      <Input
-                        type="datetime-local"
-                        value={editForm.expires_at}
-                        onChange={(e) =>
-                          setEditForm((prev) => (prev ? { ...prev, expires_at: e.target.value } : prev))
-                        }
-                      />
-                    </div>
-                    <div className="col-span-2 space-y-2">
-                      <FieldLabel>{isZh ? "绑定路由（不勾选=全局生效）" : "Bind Routes (none = global access)"}</FieldLabel>
-                      <MultiSelect
-                        options={routeOptions}
-                        values={editForm.route_ids}
-                        placeholder={isZh ? "选择绑定路由（为空=全局）" : "Select routes (empty = global)"}
-                        searchPlaceholder={isZh ? "搜索路由..." : "Search routes..."}
-                        emptyText={isZh ? "无匹配路由" : "No matching routes"}
-                        onChange={(next) =>
-                          setEditForm((prev) => (prev ? { ...prev, route_ids: next } : prev))
-                        }
-                      />
+
+                    <div className="h-px bg-slate-200/70" />
+
+                    <div className="space-y-3">
+                      <p className="text-sm font-semibold text-slate-700">{isZh ? "3. 访问限额" : "3. Access Quota"}</p>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <FieldLabel>TPM</FieldLabel>
+                          <Input
+                            type="text"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
+                            value={editForm.tpm}
+                            onChange={(e) =>
+                              setEditForm((prev) => (prev ? { ...prev, tpm: digitsOnly(e.target.value) } : prev))
+                            }
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <FieldLabel>TPD</FieldLabel>
+                          <Input
+                            type="text"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
+                            value={editForm.tpd}
+                            onChange={(e) =>
+                              setEditForm((prev) => (prev ? { ...prev, tpd: digitsOnly(e.target.value) } : prev))
+                            }
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <FieldLabel>RPM</FieldLabel>
+                          <Input
+                            type="text"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
+                            value={editForm.rpm}
+                            onChange={(e) =>
+                              setEditForm((prev) => (prev ? { ...prev, rpm: digitsOnly(e.target.value) } : prev))
+                            }
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <FieldLabel>RPD</FieldLabel>
+                          <Input
+                            type="text"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
+                            value={editForm.rpd}
+                            onChange={(e) =>
+                              setEditForm((prev) => (prev ? { ...prev, rpd: digitsOnly(e.target.value) } : prev))
+                            }
+                          />
+                        </div>
+                      </div>
                     </div>
                   </div>
                   <div className="flex gap-3">
@@ -402,9 +515,9 @@ export default function ApiKeysPage() {
                           input: {
                             name: editForm.name.trim(),
                             rpm: editForm.rpm ? Number.parseInt(editForm.rpm, 10) : undefined,
+                            rpd: editForm.rpd ? Number.parseInt(editForm.rpd, 10) : undefined,
                             tpm: editForm.tpm ? Number.parseInt(editForm.tpm, 10) : undefined,
                             tpd: editForm.tpd ? Number.parseInt(editForm.tpd, 10) : undefined,
-                            expires_at: toSqlDatetime(editForm.expires_at),
                             route_ids: editForm.route_ids,
                           },
                         })
@@ -413,7 +526,14 @@ export default function ApiKeysPage() {
                     >
                       {updateMut.isPending ? (isZh ? "保存中..." : "Saving...") : (isZh ? "保存" : "Save")}
                     </Button>
-                    <Button variant="secondary" onClick={() => setEditingId(null)}>
+                    <Button
+                      variant="secondary"
+                      onClick={() => {
+                        setEditingId(null);
+                        setEditForm(null);
+                        setCopiedEditKey(false);
+                      }}
+                    >
                       {isZh ? "取消" : "Cancel"}
                     </Button>
                   </div>
@@ -433,7 +553,7 @@ export default function ApiKeysPage() {
                   <p className="text-xs text-slate-500">
                     {maskApiKey(item.key)}
                     {" · "}
-                    RPM {item.rpm ?? "∞"} / TPM {item.tpm ?? "∞"} / TPD {item.tpd ?? "∞"}
+                    RPM {item.rpm ?? "∞"} / RPD {item.rpd ?? "∞"} / TPM {item.tpm ?? "∞"} / TPD {item.tpd ?? "∞"}
                   </p>
                   <p className="text-xs text-slate-500">
                     {isZh ? "绑定路由" : "Bound routes"}:{" "}
@@ -441,7 +561,7 @@ export default function ApiKeysPage() {
                       ? item.route_ids
                           .map((id) => routeMap.get(id)?.name ?? id.slice(0, 8))
                           .join(", ")
-                      : (isZh ? "全局" : "Global")}
+                      : (isZh ? "未绑定（默认拒绝）" : "Unbound (deny by default)")}
                   </p>
                 </div>
                 <div className="flex items-center gap-1">

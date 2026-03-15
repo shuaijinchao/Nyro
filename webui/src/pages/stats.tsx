@@ -35,8 +35,8 @@ export default function StatsPage() {
   const [hours, setHours] = useState(24);
 
   const { data: overview } = useQuery<StatsOverview>({
-    queryKey: ["stats-overview"],
-    queryFn: () => backend("get_stats_overview"),
+    queryKey: ["stats-overview", hours],
+    queryFn: () => backend("get_stats_overview", { hours }),
     refetchInterval: 10_000,
   });
 
@@ -47,14 +47,14 @@ export default function StatsPage() {
   });
 
   const { data: modelStats = [] } = useQuery<ModelStats[]>({
-    queryKey: ["stats-models"],
-    queryFn: () => backend("get_stats_by_model"),
+    queryKey: ["stats-models", hours],
+    queryFn: () => backend("get_stats_by_model", { hours }),
     refetchInterval: 30_000,
   });
 
   const { data: providerStats = [] } = useQuery<ProviderStats[]>({
-    queryKey: ["stats-providers"],
-    queryFn: () => backend("get_stats_by_provider"),
+    queryKey: ["stats-providers", hours],
+    queryFn: () => backend("get_stats_by_provider", { hours }),
     refetchInterval: 30_000,
   });
 

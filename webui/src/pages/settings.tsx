@@ -101,7 +101,7 @@ export default function SettingsPage() {
 
 client = OpenAI(
     base_url="${baseUrl}/v1",
-    api_key="sk-nyro-xxxx",  # Nyro API key
+    api_key="sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",  # Nyro API key
 )
 
 resp = client.chat.completions.create(
@@ -113,7 +113,7 @@ print(resp.choices[0].message.content)`,
 
 client = anthropic.Anthropic(
     base_url="${baseUrl}",
-    api_key="sk-nyro-xxxx",  # Nyro API key
+    api_key="sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",  # Nyro API key
 )
 
 message = client.messages.create(
@@ -127,7 +127,7 @@ from google.generativeai.client import configure
 
 # Point the SDK at the Nyro gateway
 configure(
-    api_key="sk-nyro-xxxx",
+    api_key="sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
     client_options={"api_endpoint": "127.0.0.1:${status?.proxy_port ?? 19530}"},
     transport="rest",
 )
@@ -138,13 +138,13 @@ print(response.text)`,
     curl: `# OpenAI-compatible
 curl ${baseUrl}/v1/chat/completions \\
   -H "Content-Type: application/json" \\
-  -H "Authorization: Bearer sk-nyro-xxxx" \\
+  -H "Authorization: Bearer sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" \\
   -d '{"model":"gpt-4o","messages":[{"role":"user","content":"Hi"}]}'
 
 # Anthropic-compatible
 curl ${baseUrl}/v1/messages \\
   -H "Content-Type: application/json" \\
-  -H "x-api-key: any-key" \\
+  -H "x-api-key: sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" \\
   -H "anthropic-version: 2023-06-01" \\
   -d '{"model":"claude-sonnet-4-20250514","max_tokens":1024,"messages":[{"role":"user","content":"Hi"}]}'`,
   };

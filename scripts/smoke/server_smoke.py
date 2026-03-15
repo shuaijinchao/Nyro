@@ -414,6 +414,7 @@ def run_smoke() -> None:
                 ("nyro-claude", "anthropic", "nyro-claude", provider_ids["anthropic"], "claude-mock"),
                 ("gemini-2.0-flash", "gemini", "gemini-2.0-flash", provider_ids["gemini"], "gemini-2.0-flash"),
             ]
+            route_ids: list[str] = []
             for name, ingress_protocol, virtual_model, target_provider, target_model in routes:
                 status, resp = http_request(
                     "POST",
@@ -429,6 +430,7 @@ def run_smoke() -> None:
                     headers=admin_headers,
                 )
                 assert_true(status == 200, f"create route {name} failed: {status} {resp}")
+                route_ids.append(resp["data"]["id"])
 
             # Access-controlled route must reject anonymous access.
             status, _ = http_request(
@@ -438,11 +440,11 @@ def run_smoke() -> None:
             )
             assert_true(status == 401, f"expected route auth 401 without api key, got {status}")
 
-            # Create API key (global route access).
+            # Create API key (explicitly bind allowed routes).
             status, key_resp = http_request(
                 "POST",
                 f"{admin_base}/api/v1/api-keys",
-                payload={"name": "smoke-key"},
+                payload={"name": "smoke-key", "route_ids": route_ids},
                 headers=admin_headers,
             )
             assert_true(status == 200, f"create api key failed: {status} {key_resp}")

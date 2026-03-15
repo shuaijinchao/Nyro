@@ -12,7 +12,6 @@ pub struct Provider {
     pub channel: Option<String>,
     pub models_endpoint: Option<String>,
     pub static_models: Option<String>,
-    #[serde(skip_serializing)]
     pub api_key: String,
     pub is_active: bool,
     pub created_at: String,
@@ -38,6 +37,7 @@ pub struct ApiKey {
     pub key: String,
     pub name: String,
     pub rpm: Option<i32>,
+    pub rpd: Option<i32>,
     pub tpm: Option<i32>,
     pub tpd: Option<i32>,
     pub status: String,
@@ -52,6 +52,7 @@ pub struct ApiKeyWithBindings {
     pub key: String,
     pub name: String,
     pub rpm: Option<i32>,
+    pub rpd: Option<i32>,
     pub tpm: Option<i32>,
     pub tpd: Option<i32>,
     pub status: String,
@@ -134,6 +135,7 @@ pub struct CreateRoute {
 pub struct CreateApiKey {
     pub name: String,
     pub rpm: Option<i32>,
+    pub rpd: Option<i32>,
     pub tpm: Option<i32>,
     pub tpd: Option<i32>,
     pub expires_at: Option<String>,
@@ -145,6 +147,7 @@ pub struct CreateApiKey {
 pub struct UpdateApiKey {
     pub name: Option<String>,
     pub rpm: Option<i32>,
+    pub rpd: Option<i32>,
     pub tpm: Option<i32>,
     pub tpd: Option<i32>,
     pub status: Option<String>,

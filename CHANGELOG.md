@@ -4,6 +4,39 @@ All notable changes to Nyro will be documented in this file.
 
 ---
 
+## v1.2.0
+
+> Released on 2026-03-15
+
+#### Features
+
+- **New Connect module**: add `Connect` page with `Code` / `CLI` tabs, protocol-aware route selection, and generated examples for Python / TypeScript / cURL
+- **Desktop CLI integration**: support readiness detection plus config sync/restore for Claude Code, Codex CLI, Gemini CLI, and OpenCode
+- **CLI config preview & copy flow**: show per-file update fragments and inline copy action in preview area
+- **API key policy upgrade**: enforce default-deny route authorization for protected routes and adopt `sk-<32 hex>` key format
+- **Quota extension**: add `RPD` (requests per day) to API key model, admin CRUD, UI forms, and proxy enforcement
+
+#### Improvements
+
+- **API Keys page restructure**: split create/edit forms into three sections (Basic Information, Access Permission, Access Quota), align widths, and keep key/validity immutable in edit mode
+- **Provider form polish**: add API key show/hide icon, restore API key echo in edit form, and align edit/create layout behavior
+- **Route form consistency**: align edit layout with create layout and keep single-row inputs/selects at half width
+- **Statistics time-range coverage**: make selected hours apply consistently to overview, model, and provider stats across WebUI + backend + Tauri commands
+
+#### Fixes
+
+- Fix `build-and-smoke` CI script for the new auth flow (remove deprecated `--proxy-key`, create/bind smoke API key to routes)
+- Fix CLI sync argument mismatch (`toolId` / `apiKey`) and improve frontend error message parsing for failed sync operations
+- Restore Codex `wire_api` compatibility by switching back to `responses`
+- Improve dropdown/search panel visual consistency in forms and access-control layout details
+
+#### CI & Release
+
+- Automate Homebrew Cask checksum updates in desktop release workflow after artifacts are built
+- Update release and design docs for latest route/API key behavior and installation guidance
+
+---
+
 ## v1.1.0
 
 > Released on 2026-03-13
@@ -11,7 +44,7 @@ All notable changes to Nyro will be documented in this file.
 #### Features
 
 - **Route matching redesign**: switch from fuzzy `match_pattern` to exact matching on `(ingress_protocol, virtual_model)` for OpenAI / Anthropic / Gemini ingress
-- **New API key system**: add `api_keys` + `api_key_routes` data model and full CRUD management with `sk-nyro-xxxx` key format
+- **New API key system**: add `api_keys` + `api_key_routes` data model and full CRUD management with `sk-<32 hex>` key format
 - **Route-level access control**: route first, then authorize API key only when `access_control` is enabled; support key binding to specific routes or global access
 - **Quota enforcement for API keys**: add `RPM`, `TPM`, `TPD`, key status, and expiration checks in proxy authorization flow
 

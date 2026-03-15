@@ -383,15 +383,15 @@ async fn authorize_route_access(gw: &Gateway, route: &Route, headers: &HeaderMap
         return Err(error_response(401, "missing api key"));
     };
 
-    let key_row = sqlx::query_as::<_, (String, String, Option<String>, Option<i32>, Option<i32>, Option<i32>)>(
-        "SELECT id, status, expires_at, rpm, tpm, tpd FROM api_keys WHERE key = ?",
+    let key_row = sqlx::query_as::<_, (String, String, Option<String>, Option<i32>, Option<i32>, Option<i32>, Option<i32>)>(
+        "SELECT id, status, expires_at, rpm, rpd, tpm, tpd FROM api_keys WHERE key = ?",
     )
     .bind(&raw_key)
     .fetch_optional(&gw.db)
     .await
     .map_err(|e| error_response(500, &format!("auth db error: {e}")))?;
 
-    let Some((api_key_id, status, expires_at, rpm, tpm, tpd)) = key_row else {
+    let Some((api_key_id, status, expires_at, rpm, rpd, tpm, tpd)) = key_row else {
         return Err(error_response(401, "invalid api key"));
     };
 
@@ -413,26 +413,16 @@ async fn authorize_route_access(gw: &Gateway, route: &Route, headers: &HeaderMap
         }
     }
 
-    let bindings_count = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM api_key_routes WHERE api_key_id = ?",
+    let allowed = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM api_key_routes WHERE api_key_id = ? AND route_id = ?",
     )
     .bind(&api_key_id)
+    .bind(&route.id)
     .fetch_one(&gw.db)
     .await
     .map_err(|e| error_response(500, &format!("auth db error: {e}")))?;
-
-    if bindings_count > 0 {
-        let allowed = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM api_key_routes WHERE api_key_id = ? AND route_id = ?",
-        )
-        .bind(&api_key_id)
-        .bind(&route.id)
-        .fetch_one(&gw.db)
-        .await
-        .map_err(|e| error_response(500, &format!("auth db error: {e}")))?;
-        if allowed == 0 {
-            return Err(error_response(403, "api key not allowed for this route"));
-        }
+    if allowed == 0 {
+        return Err(error_response(403, "api key not allowed for this route"));
     }
 
     if let Some(limit) = rpm.filter(|v| *v > 0) {
@@ -445,6 +435,19 @@ async fn authorize_route_access(gw: &Gateway, route: &Route, headers: &HeaderMap
         .map_err(|e| error_response(500, &format!("quota db error: {e}")))?;
         if req_count >= i64::from(limit) {
             return Err(error_response(429, "api key rpm quota exceeded"));
+        }
+    }
+
+    if let Some(limit) = rpd.filter(|v| *v > 0) {
+        let req_count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM request_logs WHERE api_key_id = ? AND created_at >= datetime('now', '-1 day')",
+        )
+        .bind(&api_key_id)
+        .fetch_one(&gw.db)
+        .await
+        .map_err(|e| error_response(500, &format!("quota db error: {e}")))?;
+        if req_count >= i64::from(limit) {
+            return Err(error_response(429, "api key rpd quota exceeded"));
         }
     }
 

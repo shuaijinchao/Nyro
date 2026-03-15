@@ -4,6 +4,39 @@ Nyro 的所有重要变更均记录在此文件中。
 
 ---
 
+## v1.2.0
+
+> 发布于 2026-03-15
+
+#### 功能
+
+- **新增「接入」模块**：增加 `Connect` 页面与 `代码接入` / `CLI 接入` 双标签，支持按协议选择路由并生成 Python / TypeScript / cURL 示例
+- **桌面端 CLI 集成**：支持 Claude Code、Codex CLI、Gemini CLI、OpenCode 的就绪检测与配置同步/恢复
+- **CLI 配置预览与复制优化**：按文件展示将更新的片段，并在预览区域内置复制能力
+- **API Key 权限模型升级**：受控路由改为默认拒绝（需显式绑定路由才可访问），并统一为 `sk-<32位hex>` 密钥格式
+- **配额能力扩展**：新增 `RPD`（每天请求数），打通 API Key 数据模型、管理接口、前端表单与代理鉴权限流
+
+#### 改进
+
+- **API Key 页面重构**：创建/编辑表单按三段式重排（基本信息、访问权限、访问限额），统一宽度策略，编辑态下有效期与 Key 不可修改
+- **Provider 表单优化**：API Key 输入支持显示/隐藏，修复编辑态 API Key 回显，并对齐创建/编辑布局行为
+- **Route 表单一致性**：编辑布局与创建布局对齐，单行输入/下拉保持半宽展示
+- **统计时间范围统一生效**：小时筛选覆盖概览、模型、提供商统计，并在 WebUI + 后端 + Tauri 命令链路保持一致
+
+#### 修复
+
+- 修复 `build-and-smoke` CI 对新鉴权流程的不兼容（移除过时 `--proxy-key`，改为创建并绑定 smoke API Key）
+- 修复 CLI 同步参数命名不一致（`toolId` / `apiKey`），并增强前端错误信息解析
+- 回退 Codex `wire_api` 为 `responses` 以兼容最新 CLI 行为
+- 优化表单下拉/搜索面板视觉一致性与访问控制开关布局细节
+
+#### CI 与发版
+
+- 桌面端发版流程支持自动计算并回写 Homebrew Cask 校验和
+- 更新路由/API Key 设计文档与安装说明，保持文档与实现一致
+
+---
+
 ## v1.1.0
 
 > 发布于 2026-03-13
@@ -11,7 +44,7 @@ Nyro 的所有重要变更均记录在此文件中。
 #### 功能
 
 - **路由匹配重构**：从模糊 `match_pattern` 切换为 `(ingress_protocol, virtual_model)` 精确匹配，支持 OpenAI / Anthropic / Gemini 接入
-- **全新 API Key 体系**：新增 `api_keys` + `api_key_routes` 数据模型及完整 CRUD，默认密钥格式为 `sk-nyro-xxxx`
+- **全新 API Key 体系**：新增 `api_keys` + `api_key_routes` 数据模型及完整 CRUD，默认密钥格式为 `sk-<32位hex>`
 - **路由级访问控制**：先匹配路由，再在 `access_control` 开启时校验 API Key；支持按路由绑定或全局生效
 - **API Key 配额能力**：在代理鉴权链路中新增 `RPM`、`TPM`、`TPD`、状态与过期时间校验
 

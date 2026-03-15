@@ -274,8 +274,16 @@ async fn query_logs_handler(
 
 // ── Stats ──
 
-async fn stats_overview(State(gw): State<Gateway>) -> impl IntoResponse {
-    match gw.admin().get_stats_overview().await {
+#[derive(Deserialize, Default)]
+struct StatsRangeParams {
+    hours: Option<i32>,
+}
+
+async fn stats_overview(
+    State(gw): State<Gateway>,
+    Query(params): Query<StatsRangeParams>,
+) -> impl IntoResponse {
+    match gw.admin().get_stats_overview(params.hours).await {
         Ok(v) => Json(serde_json::json!({ "data": v })).into_response(),
         Err(e) => err(e),
     }
@@ -301,15 +309,21 @@ async fn stats_hourly(
     }
 }
 
-async fn stats_by_model(State(gw): State<Gateway>) -> impl IntoResponse {
-    match gw.admin().get_stats_by_model().await {
+async fn stats_by_model(
+    State(gw): State<Gateway>,
+    Query(params): Query<StatsRangeParams>,
+) -> impl IntoResponse {
+    match gw.admin().get_stats_by_model(params.hours).await {
         Ok(v) => Json(serde_json::json!({ "data": v })).into_response(),
         Err(e) => err(e),
     }
 }
 
-async fn stats_by_provider(State(gw): State<Gateway>) -> impl IntoResponse {
-    match gw.admin().get_stats_by_provider().await {
+async fn stats_by_provider(
+    State(gw): State<Gateway>,
+    Query(params): Query<StatsRangeParams>,
+) -> impl IntoResponse {
+    match gw.admin().get_stats_by_provider(params.hours).await {
         Ok(v) => Json(serde_json::json!({ "data": v })).into_response(),
         Err(e) => err(e),
     }

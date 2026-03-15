@@ -16,6 +16,7 @@ for (const [path, loader] of Object.entries(iconModules)) {
 const iconMarkupCache = new Map<string, string>();
 
 interface ProviderIconProps {
+  iconKey?: string;
   name?: string;
   protocol?: string;
   baseUrl?: string;
@@ -87,6 +88,7 @@ export function resolveProviderIconKey({
 }
 
 export function ProviderIcon({
+  iconKey,
   name,
   protocol,
   baseUrl,
@@ -95,22 +97,25 @@ export function ProviderIcon({
   monochrome = false,
   fill = false,
 }: ProviderIconProps) {
-  const iconKey = resolveProviderIconKey({ name, protocol, baseUrl });
+  const resolvedIconKey =
+    iconKey && iconLoaderMap[iconKey.toLowerCase()]
+      ? iconKey.toLowerCase()
+      : resolveProviderIconKey({ name, protocol, baseUrl });
   const [iconMarkup, setIconMarkup] = useState<string>("");
   const fallback = (name || protocol || "?").slice(0, 1).toUpperCase();
 
   useEffect(() => {
-    if (!iconKey) {
+    if (!resolvedIconKey) {
       setIconMarkup("");
       return;
     }
-    const cacheKey = `${iconKey}:${monochrome ? "mono" : "color"}`;
+    const cacheKey = `${resolvedIconKey}:${monochrome ? "mono" : "color"}`;
     const cached = iconMarkupCache.get(cacheKey);
     if (cached) {
       setIconMarkup(cached);
       return;
     }
-    const loader = iconLoaderMap[iconKey];
+    const loader = iconLoaderMap[resolvedIconKey];
     if (!loader) {
       setIconMarkup("");
       return;
@@ -130,7 +135,7 @@ export function ProviderIcon({
     return () => {
       cancelled = true;
     };
-  }, [iconKey, monochrome]);
+  }, [resolvedIconKey, monochrome]);
 
   return (
     <span

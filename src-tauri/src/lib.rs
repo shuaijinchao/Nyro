@@ -84,6 +84,9 @@ pub fn run() {
             commands::get_gateway_status,
             commands::export_config,
             commands::import_config,
+            commands::detect_cli_tools,
+            commands::sync_cli_config,
+            commands::restore_cli_config,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

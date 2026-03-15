@@ -478,7 +478,7 @@ function CredentialsEditor({
       typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
         ? crypto.randomUUID().replace(/-/g, "")
         : `${Date.now()}${Math.random().toString(16).slice(2)}`;
-    setField("key-auth", "key", `sk-nyro-${suffix.slice(0, 24)}`);
+    setField("key-auth", "key", `sk-${suffix.slice(0, 32)}`);
   };
 
   const keyAuth = ((value["key-auth"] as Record<string, unknown>) || {}) as Record<string, unknown>;

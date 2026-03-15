@@ -36,6 +36,7 @@ pub async fn migrate(pool: &SqlitePool) -> anyhow::Result<()> {
     ensure_route_column(pool, "access_control", "INTEGER DEFAULT 0").await?;
     ensure_request_log_column(pool, "api_key_id", "TEXT").await?;
     ensure_api_key_tables(pool).await?;
+    ensure_api_key_column(pool, "rpd", "INTEGER").await?;
     backfill_provider_channel(pool).await?;
     backfill_route_fields(pool).await?;
     Ok(())
@@ -90,6 +91,19 @@ async fn ensure_request_log_column(
     Ok(())
 }
 
+async fn ensure_api_key_column(
+    pool: &SqlitePool,
+    column_name: &str,
+    definition: &str,
+) -> anyhow::Result<()> {
+    if !column_exists(pool, "api_keys", column_name).await? {
+        let sql = format!("ALTER TABLE api_keys ADD COLUMN {column_name} {definition}");
+        sqlx::query(&sql).execute(pool).await?;
+    }
+
+    Ok(())
+}
+
 async fn ensure_api_key_tables(pool: &SqlitePool) -> anyhow::Result<()> {
     sqlx::query(
         r#"CREATE TABLE IF NOT EXISTS api_keys (
@@ -97,6 +111,7 @@ async fn ensure_api_key_tables(pool: &SqlitePool) -> anyhow::Result<()> {
             key         TEXT NOT NULL UNIQUE,
             name        TEXT NOT NULL,
             rpm         INTEGER,
+            rpd         INTEGER,
             tpm         INTEGER,
             tpd         INTEGER,
             status      TEXT NOT NULL DEFAULT 'active',

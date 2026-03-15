@@ -77,16 +77,31 @@ function resolveHTTP(cmd: string, args?: Record<string, unknown>): HTTPMapping {
       return { method: "GET", url: `${base}/logs${qs ? "?" + qs : ""}` };
     }
 
-    case "get_stats_overview":
-      return { method: "GET", url: `${base}/stats/overview` };
+    case "get_stats_overview": {
+      const hours = args?.hours;
+      return {
+        method: "GET",
+        url: `${base}/stats/overview${hours != null ? `?hours=${hours}` : ""}`,
+      };
+    }
     case "get_stats_hourly": {
       const hours = args?.hours ?? 24;
       return { method: "GET", url: `${base}/stats/hourly?hours=${hours}` };
     }
-    case "get_stats_by_model":
-      return { method: "GET", url: `${base}/stats/models` };
-    case "get_stats_by_provider":
-      return { method: "GET", url: `${base}/stats/providers` };
+    case "get_stats_by_model": {
+      const hours = args?.hours;
+      return {
+        method: "GET",
+        url: `${base}/stats/models${hours != null ? `?hours=${hours}` : ""}`,
+      };
+    }
+    case "get_stats_by_provider": {
+      const hours = args?.hours;
+      return {
+        method: "GET",
+        url: `${base}/stats/providers${hours != null ? `?hours=${hours}` : ""}`,
+      };
+    }
 
     case "get_setting":
       return { method: "GET", url: `${base}/settings/${args?.key}` };
