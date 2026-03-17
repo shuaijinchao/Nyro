@@ -276,6 +276,7 @@ const providerPresets: ProviderPreset[] = [
           openai: "https://openrouter.ai/api/v1",
           anthropic: "https://openrouter.ai/api",
         },
+        modelsEndpoint: "https://openrouter.ai/api/v1/models",
       },
     ],
   },
@@ -314,8 +315,22 @@ function toGatewayBaseUrl(url: string, protocol: ProviderProtocol) {
 
 function defaultModelsEndpoint(baseUrl: string, protocol: ProviderProtocol) {
   const normalized = baseUrl.trim().replace(/\/+$/, "");
+  let parsed: URL | null = null;
+  try {
+    parsed = new URL(normalized);
+  } catch {
+    parsed = null;
+  }
 
   if (protocol === "openai" || protocol === "anthropic") {
+    // OpenRouter model discovery endpoint should be /api/v1/models.
+    if (parsed?.host === "openrouter.ai") {
+      const pathname = parsed.pathname.replace(/\/+$/, "");
+      if (pathname === "/api" || pathname === "/api/v1") {
+        return `${parsed.origin}/api/v1/models`;
+      }
+    }
+
     try {
       const pathname = new URL(normalized).pathname.replace(/\/+$/, "");
       return pathname && pathname !== "/" ? `${normalized}/models` : `${normalized}/v1/models`;
@@ -467,12 +482,13 @@ export default function ProvidersPage() {
   });
 
   const createMut = useMutation({
-    mutationFn: (input: CreateProvider) => backend("create_provider", { input }),
-    onSuccess: () => {
+    mutationFn: (input: CreateProvider) => backend<Provider>("create_provider", { input }),
+    onSuccess: async (createdProvider: Provider) => {
       qc.invalidateQueries({ queryKey: ["providers"] });
       setShowForm(false);
       setSelectedPresetId(DEFAULT_PRESET_ID);
       setForm(emptyCreate);
+      await handleTest(createdProvider);
     },
   });
 
@@ -618,10 +634,7 @@ export default function ProvidersPage() {
         "success",
         `${isZh ? "✓ 认证通过，获取到" : "✓ Auth valid, fetched"} ${models.length} ${isZh ? "个模型" : "models"}`,
       );
-      models.slice(0, 8).forEach((model) => appendTestLog("info", `· ${model}`));
-      if (models.length > 8) {
-        appendTestLog("info", isZh ? `· ... 还有 ${models.length - 8} 个` : `· ... and ${models.length - 8} more`);
-      }
+      models.forEach((model) => appendTestLog("info", `· ${model}`));
 
       finish(
         {
@@ -1382,7 +1395,13 @@ export default function ProvidersPage() {
               testLogs.map((log, idx) => (
                 <p
                   key={`${log.timestamp}-${idx}`}
-                  className="text-emerald-300"
+                  className={
+                    log.level === "error"
+                      ? "text-red-300"
+                      : log.level === "success"
+                        ? "text-emerald-300"
+                        : "text-emerald-200"
+                  }
                 >
                   [{log.timestamp}] {log.message}
                 </p>
