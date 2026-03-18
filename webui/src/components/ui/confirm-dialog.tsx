@@ -14,6 +14,7 @@ type ConfirmDialogProps = {
   onOpenChange: (open: boolean) => void;
   title: string;
   description?: string;
+  hideCancel?: boolean;
   cancelText?: string;
   confirmText?: string;
   onConfirm: () => void;
@@ -25,6 +26,7 @@ function ConfirmDialog({
   onOpenChange,
   title,
   description,
+  hideCancel = false,
   cancelText = "Cancel",
   confirmText = "Confirm",
   onConfirm,
@@ -38,9 +40,11 @@ function ConfirmDialog({
           {description && <DialogDescription>{description}</DialogDescription>}
         </DialogHeader>
         <DialogFooter>
-          <Button variant="secondary" onClick={() => onOpenChange(false)}>
-            {cancelText}
-          </Button>
+          {!hideCancel && (
+            <Button variant="secondary" onClick={() => onOpenChange(false)}>
+              {cancelText}
+            </Button>
+          )}
           <Button
             onClick={onConfirm}
             className={cn("bg-red-600 text-white hover:bg-red-500", confirmClassName)}

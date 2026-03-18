@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, Pencil, Plus, Route as RouteIcon, Trash2, X } from "lucide-react";
 
 import { backend } from "@/lib/backend";
+import { localizeBackendErrorMessage } from "@/lib/backend-error";
 import type { CreateRoute, Provider, Route as RouteType, UpdateRoute } from "@/lib/types";
 import { useLocale } from "@/lib/i18n";
 import { ProviderIcon } from "@/components/ui/provider-icon";
@@ -62,6 +63,18 @@ export default function RoutesPage() {
   const [editForm, setEditForm] = useState<(RouteForm & { id: string }) | null>(null);
   const [editError, setEditError] = useState<string | null>(null);
   const [routeToDelete, setRouteToDelete] = useState<RouteType | null>(null);
+  const [errorDialog, setErrorDialog] = useState<{ title: string; description?: string } | null>(null);
+
+  function formatErrorMessage(error: unknown) {
+    return localizeBackendErrorMessage(error, isZh);
+  }
+
+  function showErrorDialog(titleZh: string, titleEn: string, error: unknown) {
+    setErrorDialog({
+      title: isZh ? titleZh : titleEn,
+      description: formatErrorMessage(error),
+    });
+  }
 
   const { data: routes = [], isLoading } = useQuery<RouteType[]>({
     queryKey: ["routes"],
@@ -79,6 +92,9 @@ export default function RoutesPage() {
       setShowForm(false);
       setCreateForm(emptyCreate);
     },
+    onError: (error: unknown) => {
+      showErrorDialog("创建路由失败", "Failed to create route", error);
+    },
   });
   const updateMut = useMutation({
     mutationFn: ({ id, input }: { id: string; input: UpdateRoute }) => backend("update_route", { id, input }),
@@ -88,11 +104,17 @@ export default function RoutesPage() {
       setEditForm(null);
       qc.invalidateQueries({ queryKey: ["routes"] });
     },
-    onError: (err: Error) => setEditError(String(err)),
+    onError: (err: Error) => {
+      setEditError(String(err));
+      showErrorDialog("保存路由失败", "Failed to save route", err);
+    },
   });
   const deleteMut = useMutation({
     mutationFn: (id: string) => backend("delete_route", { id }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["routes"] }),
+    onError: (error: unknown) => {
+      showErrorDialog("删除路由失败", "Failed to delete route", error);
+    },
   });
 
   const providerOptions = useMemo(
@@ -605,6 +627,17 @@ export default function RoutesPage() {
           deleteMut.mutate(routeToDelete.id);
           setRouteToDelete(null);
         }}
+      />
+      <ConfirmDialog
+        open={Boolean(errorDialog)}
+        onOpenChange={(open) => {
+          if (!open) setErrorDialog(null);
+        }}
+        title={errorDialog?.title ?? ""}
+        description={errorDialog?.description}
+        hideCancel
+        confirmText={isZh ? "我知道了" : "OK"}
+        onConfirm={() => setErrorDialog(null)}
       />
     </div>
   );

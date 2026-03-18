@@ -20,6 +20,13 @@ async function invokeHTTP<T>(cmd: string, args?: Record<string, unknown>): Promi
   const text = await resp.text();
   if (!text) return {} as T;
   const json = JSON.parse(text);
+  if (json && typeof json === "object" && "error" in json) {
+    const errorMessage =
+      typeof json.error === "string" && json.error.trim()
+        ? json.error
+        : `Request failed: ${cmd}`;
+    throw new Error(errorMessage);
+  }
   return json.data ?? json;
 }
 

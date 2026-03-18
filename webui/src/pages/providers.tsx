@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { backend } from "@/lib/backend";
+import { localizeBackendErrorMessage } from "@/lib/backend-error";
 import type { Provider, CreateProvider, UpdateProvider, TestResult } from "@/lib/types";
 import {
   Server,
@@ -455,6 +456,7 @@ export default function ProvidersPage() {
   const [selectedPresetId, setSelectedPresetId] = useState(DEFAULT_PRESET_ID);
   const [showCreateApiKey, setShowCreateApiKey] = useState(false);
   const [showEditApiKey, setShowEditApiKey] = useState(false);
+  const [errorDialog, setErrorDialog] = useState<{ title: string; description?: string } | null>(null);
   const activeTestRunRef = useRef(0);
   const logsContainerRef = useRef<HTMLDivElement | null>(null);
 
@@ -490,6 +492,9 @@ export default function ProvidersPage() {
       setForm(emptyCreate);
       await handleTest(createdProvider);
     },
+    onError: (error: unknown) => {
+      showErrorDialog("创建提供商失败", "Failed to create provider", error);
+    },
   });
 
   const [editError, setEditError] = useState<string | null>(null);
@@ -504,12 +509,16 @@ export default function ProvidersPage() {
     },
     onError: (err: Error) => {
       setEditError(String(err));
+      showErrorDialog("保存提供商失败", "Failed to save provider", err);
     },
   });
 
   const deleteMut = useMutation({
     mutationFn: (id: string) => backend("delete_provider", { id }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["providers"] }),
+    onError: (error: unknown) => {
+      showErrorDialog("删除提供商失败", "Failed to delete provider", error);
+    },
   });
 
   function appendTestLog(level: TestLogLevel, message: string) {
@@ -517,8 +526,14 @@ export default function ProvidersPage() {
   }
 
   function normalizeErrorMessage(error: unknown) {
-    if (error instanceof Error) return error.message;
-    return String(error);
+    return localizeBackendErrorMessage(error, isZh);
+  }
+
+  function showErrorDialog(titleZh: string, titleEn: string, error: unknown) {
+    setErrorDialog({
+      title: isZh ? titleZh : titleEn,
+      description: normalizeErrorMessage(error),
+    });
   }
 
   function closeTestDialog() {
@@ -1438,6 +1453,17 @@ export default function ProvidersPage() {
           deleteMut.mutate(providerToDelete.id);
           setProviderToDelete(null);
         }}
+      />
+      <ConfirmDialog
+        open={Boolean(errorDialog)}
+        onOpenChange={(open) => {
+          if (!open) setErrorDialog(null);
+        }}
+        title={errorDialog?.title ?? ""}
+        description={errorDialog?.description}
+        hideCancel
+        confirmText={isZh ? "我知道了" : "OK"}
+        onConfirm={() => setErrorDialog(null)}
       />
     </div>
   );

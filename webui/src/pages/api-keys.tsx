@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronLeft, ChevronRight, Copy, KeyRound, Pencil, Plus, Trash2, X } from "lucide-react";
 
 import { backend } from "@/lib/backend";
+import { localizeBackendErrorMessage } from "@/lib/backend-error";
 import type { ApiKey, CreateApiKey, Route as RouteType, UpdateApiKey } from "@/lib/types";
 import { useLocale } from "@/lib/i18n";
 import { Button } from "@/components/ui/button";
@@ -122,6 +123,18 @@ export default function ApiKeysPage() {
   const [showCreatedDialog, setShowCreatedDialog] = useState(false);
   const [copiedCreatedKey, setCopiedCreatedKey] = useState(false);
   const [apiKeyToDelete, setApiKeyToDelete] = useState<ApiKey | null>(null);
+  const [errorDialog, setErrorDialog] = useState<{ title: string; description?: string } | null>(null);
+
+  function formatErrorMessage(error: unknown) {
+    return localizeBackendErrorMessage(error, isZh);
+  }
+
+  function showErrorDialog(titleZh: string, titleEn: string, error: unknown) {
+    setErrorDialog({
+      title: isZh ? titleZh : titleEn,
+      description: formatErrorMessage(error),
+    });
+  }
 
   const { data: apiKeys = [], isLoading } = useQuery<ApiKey[]>({
     queryKey: ["api-keys"],
@@ -141,6 +154,9 @@ export default function ApiKeysPage() {
       setCreatedKey(created.key);
       setShowCreatedDialog(true);
     },
+    onError: (error: unknown) => {
+      showErrorDialog("创建 API Key 失败", "Failed to create API key", error);
+    },
   });
   const updateMut = useMutation({
     mutationFn: ({ id, input }: { id: string; input: UpdateApiKey }) => backend("update_api_key", { id, input }),
@@ -149,10 +165,16 @@ export default function ApiKeysPage() {
       setEditingId(null);
       setEditForm(null);
     },
+    onError: (error: unknown) => {
+      showErrorDialog("保存 API Key 失败", "Failed to save API key", error);
+    },
   });
   const deleteMut = useMutation({
     mutationFn: (id: string) => backend("delete_api_key", { id }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["api-keys"] }),
+    onError: (error: unknown) => {
+      showErrorDialog("删除 API Key 失败", "Failed to delete API key", error);
+    },
   });
 
   const totalPages = Math.max(1, Math.ceil(apiKeys.length / PAGE_SIZE));
@@ -690,6 +712,17 @@ export default function ApiKeysPage() {
           deleteMut.mutate(apiKeyToDelete.id);
           setApiKeyToDelete(null);
         }}
+      />
+      <ConfirmDialog
+        open={Boolean(errorDialog)}
+        onOpenChange={(open) => {
+          if (!open) setErrorDialog(null);
+        }}
+        title={errorDialog?.title ?? ""}
+        description={errorDialog?.description}
+        hideCancel
+        confirmText={isZh ? "我知道了" : "OK"}
+        onConfirm={() => setErrorDialog(null)}
       />
     </div>
   );

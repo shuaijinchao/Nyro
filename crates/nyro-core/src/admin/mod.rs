@@ -40,12 +40,14 @@ impl AdminService {
 
     pub async fn create_provider(&self, input: CreateProvider) -> anyhow::Result<Provider> {
         let id = uuid::Uuid::new_v4().to_string();
+        let name = normalize_name(&input.name, "provider name")?;
+        self.ensure_provider_name_unique(None, &name).await?;
         let vendor = normalize_vendor(input.vendor.as_deref());
         sqlx::query(
             "INSERT INTO providers (id, name, vendor, protocol, base_url, preset_key, channel, models_endpoint, static_models, api_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
-        .bind(&input.name)
+        .bind(&name)
         .bind(&vendor)
         .bind(&input.protocol)
         .bind(&input.base_url)
@@ -68,7 +70,8 @@ impl AdminService {
         let current = self.get_provider(id).await?;
         let current_base_url = current.base_url.clone();
 
-        let name = input.name.unwrap_or(current.name);
+        let name = normalize_name(&input.name.unwrap_or(current.name), "provider name")?;
+        self.ensure_provider_name_unique(Some(id), &name).await?;
         let vendor = if input.vendor.is_some() {
             normalize_vendor(input.vendor.as_deref())
         } else {
@@ -253,6 +256,8 @@ impl AdminService {
     }
 
     pub async fn create_route(&self, input: CreateRoute) -> anyhow::Result<Route> {
+        let name = normalize_name(&input.name, "route name")?;
+        self.ensure_route_name_unique(None, &name).await?;
         ensure_protocol(&input.ingress_protocol)?;
         ensure_virtual_model(&input.virtual_model)?;
         self.ensure_route_unique(None, &input.ingress_protocol, &input.virtual_model)
@@ -264,7 +269,7 @@ impl AdminService {
             "INSERT INTO routes (id, name, ingress_protocol, virtual_model, match_pattern, target_provider, target_model, access_control) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
-        .bind(&input.name)
+        .bind(&name)
         .bind(input.ingress_protocol.trim().to_lowercase())
         .bind(input.virtual_model.trim())
         .bind(input.virtual_model.trim())
@@ -293,7 +298,8 @@ impl AdminService {
         .fetch_one(&self.gw.db)
         .await?;
 
-        let name = input.name.unwrap_or(current.name);
+        let name = normalize_name(&input.name.unwrap_or(current.name), "route name")?;
+        self.ensure_route_name_unique(Some(id), &name).await?;
         let ingress_protocol = input.ingress_protocol.unwrap_or(current.ingress_protocol);
         let virtual_model = input.virtual_model.unwrap_or(current.virtual_model);
         let target_provider = input.target_provider.unwrap_or(current.target_provider);
@@ -397,13 +403,15 @@ impl AdminService {
     pub async fn create_api_key(&self, input: CreateApiKey) -> anyhow::Result<ApiKeyWithBindings> {
         let id = uuid::Uuid::new_v4().to_string();
         let key = format!("sk-{}", uuid::Uuid::new_v4().simple());
+        let name = normalize_name(&input.name, "api key name")?;
+        self.ensure_api_key_name_unique(None, &name).await?;
 
         sqlx::query(
             "INSERT INTO api_keys (id, key, name, rpm, rpd, tpm, tpd, status, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?)",
         )
         .bind(&id)
         .bind(&key)
-        .bind(input.name.trim())
+        .bind(&name)
         .bind(input.rpm)
         .bind(input.rpd)
         .bind(input.tpm)
@@ -424,7 +432,8 @@ impl AdminService {
         .fetch_one(&self.gw.db)
         .await?;
 
-        let name = input.name.unwrap_or(current.name);
+        let name = normalize_name(&input.name.unwrap_or(current.name), "api key name")?;
+        self.ensure_api_key_name_unique(Some(id), &name).await?;
         let rpm = input.rpm.or(current.rpm);
         let rpd = input.rpd.or(current.rpd);
         let tpm = input.tpm.or(current.tpm);
@@ -439,7 +448,7 @@ impl AdminService {
         sqlx::query(
             "UPDATE api_keys SET name=?, rpm=?, rpd=?, tpm=?, tpd=?, status=?, expires_at=?, updated_at=datetime('now') WHERE id=?",
         )
-        .bind(name.trim())
+        .bind(&name)
         .bind(rpm)
         .bind(rpd)
         .bind(tpm)
@@ -703,7 +712,7 @@ impl AdminService {
 
         for p in &data.providers {
             let exists = sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM providers WHERE name = ?",
+                "SELECT COUNT(*) FROM providers WHERE lower(trim(name)) = lower(trim(?))",
             )
             .bind(&p.name)
             .fetch_one(&self.gw.db)
@@ -711,7 +720,7 @@ impl AdminService {
             .unwrap_or(0);
 
             if exists == 0 {
-                let _ = self
+                if self
                     .create_provider(CreateProvider {
                         name: p.name.clone(),
                         vendor: p.vendor.clone(),
@@ -723,14 +732,19 @@ impl AdminService {
                         static_models: p.static_models.clone(),
                         api_key: p.api_key.clone(),
                     })
-                    .await;
-                providers_imported += 1;
+                    .await
+                    .is_ok()
+                {
+                    providers_imported += 1;
+                }
             }
         }
 
         for r in &data.routes {
             let exists =
-                sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM routes WHERE name = ?")
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT COUNT(*) FROM routes WHERE lower(trim(name)) = lower(trim(?))",
+                )
                     .bind(&r.name)
                     .fetch_one(&self.gw.db)
                     .await
@@ -744,7 +758,7 @@ impl AdminService {
                 .await?;
 
                 if let Some(pid) = provider_id {
-                    let _ = self
+                    if self
                         .create_route(CreateRoute {
                             name: r.name.clone(),
                             ingress_protocol: r.ingress_protocol.clone(),
@@ -753,8 +767,11 @@ impl AdminService {
                             target_model: r.target_model.clone(),
                             access_control: Some(r.access_control),
                         })
-                        .await;
-                    routes_imported += 1;
+                        .await
+                        .is_ok()
+                    {
+                        routes_imported += 1;
+                    }
                 }
             }
         }
@@ -806,6 +823,108 @@ impl AdminService {
         Ok(())
     }
 
+    async fn ensure_provider_name_unique(
+        &self,
+        exclude_id: Option<&str>,
+        name: &str,
+    ) -> anyhow::Result<()> {
+        let sql = if exclude_id.is_some() {
+            "SELECT id FROM providers WHERE lower(trim(name)) = lower(trim(?)) AND id != ? LIMIT 1"
+        } else {
+            "SELECT id FROM providers WHERE lower(trim(name)) = lower(trim(?)) LIMIT 1"
+        };
+
+        let exists = if let Some(provider_id) = exclude_id {
+            sqlx::query_scalar::<_, String>(sql)
+                .bind(name)
+                .bind(provider_id)
+                .fetch_optional(&self.gw.db)
+                .await?
+        } else {
+            sqlx::query_scalar::<_, String>(sql)
+                .bind(name)
+                .fetch_optional(&self.gw.db)
+                .await?
+        };
+
+        if exists.is_some() {
+            return Err(coded_error(
+                "PROVIDER_NAME_CONFLICT",
+                &format!("provider name already exists: {name}"),
+                serde_json::json!({ "name": name }),
+            ));
+        }
+        Ok(())
+    }
+
+    async fn ensure_route_name_unique(
+        &self,
+        exclude_id: Option<&str>,
+        name: &str,
+    ) -> anyhow::Result<()> {
+        let sql = if exclude_id.is_some() {
+            "SELECT id FROM routes WHERE lower(trim(name)) = lower(trim(?)) AND id != ? LIMIT 1"
+        } else {
+            "SELECT id FROM routes WHERE lower(trim(name)) = lower(trim(?)) LIMIT 1"
+        };
+
+        let exists = if let Some(route_id) = exclude_id {
+            sqlx::query_scalar::<_, String>(sql)
+                .bind(name)
+                .bind(route_id)
+                .fetch_optional(&self.gw.db)
+                .await?
+        } else {
+            sqlx::query_scalar::<_, String>(sql)
+                .bind(name)
+                .fetch_optional(&self.gw.db)
+                .await?
+        };
+
+        if exists.is_some() {
+            return Err(coded_error(
+                "ROUTE_NAME_CONFLICT",
+                &format!("route name already exists: {name}"),
+                serde_json::json!({ "name": name }),
+            ));
+        }
+        Ok(())
+    }
+
+    async fn ensure_api_key_name_unique(
+        &self,
+        exclude_id: Option<&str>,
+        name: &str,
+    ) -> anyhow::Result<()> {
+        let sql = if exclude_id.is_some() {
+            "SELECT id FROM api_keys WHERE lower(trim(name)) = lower(trim(?)) AND id != ? LIMIT 1"
+        } else {
+            "SELECT id FROM api_keys WHERE lower(trim(name)) = lower(trim(?)) LIMIT 1"
+        };
+
+        let exists = if let Some(api_key_id) = exclude_id {
+            sqlx::query_scalar::<_, String>(sql)
+                .bind(name)
+                .bind(api_key_id)
+                .fetch_optional(&self.gw.db)
+                .await?
+        } else {
+            sqlx::query_scalar::<_, String>(sql)
+                .bind(name)
+                .fetch_optional(&self.gw.db)
+                .await?
+        };
+
+        if exists.is_some() {
+            return Err(coded_error(
+                "API_KEY_NAME_CONFLICT",
+                &format!("api key name already exists: {name}"),
+                serde_json::json!({ "name": name }),
+            ));
+        }
+        Ok(())
+    }
+
     async fn list_api_key_route_ids(&self, api_key_id: &str) -> anyhow::Result<Vec<String>> {
         let route_ids = sqlx::query_scalar::<_, String>(
             "SELECT route_id FROM api_key_routes WHERE api_key_id = ? ORDER BY route_id ASC",
@@ -846,6 +965,17 @@ fn format_connectivity_error(error: &reqwest::Error) -> String {
     error.to_string()
 }
 
+fn coded_error(code: &str, message: &str, params: Value) -> anyhow::Error {
+    anyhow::anyhow!(
+        "{}",
+        serde_json::json!({
+            "code": code,
+            "message": message,
+            "params": params,
+        })
+    )
+}
+
 fn ensure_protocol(protocol: &str) -> anyhow::Result<()> {
     match protocol.trim().to_lowercase().as_str() {
         "openai" | "anthropic" | "gemini" => Ok(()),
@@ -858,6 +988,14 @@ fn ensure_virtual_model(model: &str) -> anyhow::Result<()> {
         anyhow::bail!("virtual_model cannot be empty");
     }
     Ok(())
+}
+
+fn normalize_name(name: &str, field: &str) -> anyhow::Result<String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("{field} cannot be empty");
+    }
+    Ok(trimmed.to_string())
 }
 
 fn normalize_vendor(vendor: Option<&str>) -> Option<String> {

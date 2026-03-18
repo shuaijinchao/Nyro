@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState, useRef } from "react";
 import { backend, IS_TAURI } from "@/lib/backend";
+import { localizeBackendErrorMessage } from "@/lib/backend-error";
 import type { GatewayStatus, ExportData, ImportResult } from "@/lib/types";
 import { useLocale } from "@/lib/i18n";
 import {
@@ -13,6 +14,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 export default function SettingsPage() {
   const { locale } = useLocale();
@@ -23,6 +25,7 @@ export default function SettingsPage() {
   const [copied, setCopied] = useState(false);
   const [tab, setTab] = useState<"python-openai" | "python-anthropic" | "python-gemini" | "curl">("python-openai");
   const fileRef = useRef<HTMLInputElement>(null);
+  const [errorDialog, setErrorDialog] = useState<{ title: string; description?: string } | null>(null);
 
   const { data: status } = useQuery<GatewayStatus>({
     queryKey: ["gateway-status"],
@@ -37,10 +40,24 @@ export default function SettingsPage() {
   const [retentionInput, setRetentionInput] = useState<string>("");
   const retentionValue = retentionInput || retentionDays || "30";
 
+  function formatErrorMessage(error: unknown) {
+    return localizeBackendErrorMessage(error, isZh);
+  }
+
+  function showErrorDialog(titleZh: string, titleEn: string, error: unknown) {
+    setErrorDialog({
+      title: isZh ? titleZh : titleEn,
+      description: formatErrorMessage(error),
+    });
+  }
+
   const saveSetting = useMutation({
     mutationFn: (value: string) =>
       backend("set_setting", { key: "log_retention_days", value }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["setting", "log_retention_days"] }),
+    onError: (error: unknown) => {
+      showErrorDialog("保存设置失败", "Failed to save settings", error);
+    },
   });
 
   const exportMut = useMutation({
@@ -54,6 +71,9 @@ export default function SettingsPage() {
       a.click();
       URL.revokeObjectURL(url);
     },
+    onError: (error: unknown) => {
+      showErrorDialog("导出配置失败", "Failed to export config", error);
+    },
   });
 
   const importMut = useMutation({
@@ -62,6 +82,9 @@ export default function SettingsPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["providers"] });
       qc.invalidateQueries({ queryKey: ["routes"] });
+    },
+    onError: (error: unknown) => {
+      showErrorDialog("导入配置失败", "Failed to import config", error);
     },
   });
 
@@ -74,7 +97,10 @@ export default function SettingsPage() {
         const data = JSON.parse(reader.result as string) as ExportData;
         importMut.mutate(data);
       } catch {
-        alert(isZh ? "无效的 JSON 文件" : "Invalid JSON file");
+        setErrorDialog({
+          title: isZh ? "导入配置失败" : "Failed to import config",
+          description: isZh ? "无效的 JSON 文件" : "Invalid JSON file",
+        });
       }
     };
     reader.readAsText(file);
@@ -372,6 +398,17 @@ curl ${baseUrl}/v1/messages \\
           ))}
         </div>
       </div>
+      <ConfirmDialog
+        open={Boolean(errorDialog)}
+        onOpenChange={(open) => {
+          if (!open) setErrorDialog(null);
+        }}
+        title={errorDialog?.title ?? ""}
+        description={errorDialog?.description}
+        hideCancel
+        confirmText={isZh ? "我知道了" : "OK"}
+        onConfirm={() => setErrorDialog(null)}
+      />
     </div>
   );
 }

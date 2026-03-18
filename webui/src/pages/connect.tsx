@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Loader2, TerminalSquare, Wrench } from "lucide-react";
 
 import { backend, IS_TAURI } from "@/lib/backend";
+import { localizeBackendErrorMessage } from "@/lib/backend-error";
 import type { ApiKey, GatewayStatus, Route as RouteType } from "@/lib/types";
 import { useLocale } from "@/lib/i18n";
 import { Button } from "@/components/ui/button";
@@ -16,6 +17,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { ProviderIcon } from "@/components/ui/provider-icon";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 const CodeHighlighter = lazy(() => import("@/components/ui/code-highlighter"));
 
@@ -334,6 +336,7 @@ export default function ConnectPage() {
     kind: "success" | "error";
     text: string;
   } | null>(null);
+  const [errorDialog, setErrorDialog] = useState<{ title: string; description?: string } | null>(null);
 
   const { data: routes = [] } = useQuery<RouteType[]>({
     queryKey: ["routes"],
@@ -468,23 +471,8 @@ export default function ConnectPage() {
   const cliPreviewLang = "bash";
 
   function formatCliError(error: unknown) {
-    if (typeof error === "string" && error.trim()) return error;
-    if (error instanceof Error && error.message) return error.message;
-    if (error && typeof error === "object") {
-      const obj = error as Record<string, unknown>;
-      if (typeof obj.message === "string" && obj.message.trim()) return obj.message;
-      if (typeof obj.error === "string" && obj.error.trim()) return obj.error;
-      if (obj.error && typeof obj.error === "object") {
-        const nested = obj.error as Record<string, unknown>;
-        if (typeof nested.message === "string" && nested.message.trim()) return nested.message;
-      }
-      try {
-        const serialized = JSON.stringify(obj);
-        if (serialized && serialized !== "{}") return serialized;
-      } catch {
-        // ignore json stringify errors
-      }
-    }
+    const localized = localizeBackendErrorMessage(error, isZh);
+    if (localized && localized !== "undefined" && localized !== "null") return localized;
     return isZh ? "操作失败，请重试" : "Operation failed, please retry";
   }
 
@@ -504,9 +492,14 @@ export default function ConnectPage() {
       qc.invalidateQueries({ queryKey: ["connect-cli-ready-status"] });
     },
     onError: (error) => {
+      const message = formatCliError(error);
       setCliActionMessage({
         kind: "error",
-        text: formatCliError(error),
+        text: message,
+      });
+      setErrorDialog({
+        title: isZh ? "同步配置失败" : "Failed to sync config",
+        description: message,
       });
     },
   });
@@ -525,9 +518,14 @@ export default function ConnectPage() {
       });
     },
     onError: (error) => {
+      const message = formatCliError(error);
       setCliActionMessage({
         kind: "error",
-        text: formatCliError(error),
+        text: message,
+      });
+      setErrorDialog({
+        title: isZh ? "恢复配置失败" : "Failed to restore config",
+        description: message,
       });
     },
   });
@@ -846,6 +844,17 @@ export default function ConnectPage() {
           </TabsContent>
         </Tabs>
       </div>
+      <ConfirmDialog
+        open={Boolean(errorDialog)}
+        onOpenChange={(open) => {
+          if (!open) setErrorDialog(null);
+        }}
+        title={errorDialog?.title ?? ""}
+        description={errorDialog?.description}
+        hideCancel
+        confirmText={isZh ? "我知道了" : "OK"}
+        onConfirm={() => setErrorDialog(null)}
+      />
     </div>
   );
 }
