@@ -273,9 +273,9 @@ function cliPreviewTemplate(params: {
   }
   if (tool.id === "codex-cli") {
     const reasoningLine = capabilities?.reasoning ? 'model_reasoning_effort = "high"\n' : "";
-    const contextLine = capabilities?.context_window
-      ? `model_context_window = ${capabilities.context_window}\n`
-      : "";
+    const modelContextWindow = capabilities?.context_window && capabilities.context_window > 0
+      ? capabilities.context_window
+      : 128000;
     return `# ~/.codex/auth.json
 {
   "OPENAI_API_KEY": "${apiKey}"
@@ -284,14 +284,38 @@ function cliPreviewTemplate(params: {
 # ~/.codex/config.toml
 model_provider = "nyro"
 model = "${model}"
-${reasoningLine}${contextLine}model_catalog_json = "~/.codex/nyro-models.json"
+model_context_window = 128000
+${reasoningLine}model_catalog_json = "~/.codex/nyro-models.json"
 disable_response_storage = true
 
 [model_providers.nyro]
 name = "Nyro Gateway"
 base_url = "${host}/v1"
 wire_api = "responses"
-requires_openai_auth = true`;
+requires_openai_auth = true
+
+# ~/.codex/nyro-models.json
+{
+  "models": [
+    {
+      "slug": "${model}",
+      "display_name": "${model}",
+      "supported_reasoning_levels": [],
+      "shell_type": "shell_command",
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 1,
+      "base_instructions": "",
+      "supports_reasoning_summaries": false,
+      "support_verbosity": false,
+      "apply_patch_tool_type": "freeform",
+      "truncation_policy": { "mode": "tokens", "limit": 10000 },
+      "supports_parallel_tool_calls": false,
+      "experimental_supported_tools": [],
+      "context_window": ${modelContextWindow}
+    }
+  ]
+}`;
   }
   if (tool.id === "gemini-cli") {
     return `# ~/.gemini/.env
@@ -310,6 +334,8 @@ GOOGLE_GEMINI_BASE_URL=${host}
   }
   return `# ~/.config/opencode/opencode.json
 {
+  "$schema": "https://opencode.ai/config.json",
+  "model": "nyro/${model}",
   "provider": {
     "nyro": {
       "name": "Nyro Gateway",

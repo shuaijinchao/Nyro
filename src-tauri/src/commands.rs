@@ -656,12 +656,10 @@ pub async fn sync_cli_config(
             let mut config_lines = vec![
                 r#"model_provider = "nyro""#.to_string(),
                 format!(r#"model = "{}""#, normalized_model),
+                r#"model_context_window = 128000"#.to_string(),
             ];
             if caps.reasoning.unwrap_or(false) {
                 config_lines.push(r#"model_reasoning_effort = "high""#.to_string());
-            }
-            if let Some(context_window) = caps.context_window.filter(|v| *v > 0) {
-                config_lines.push(format!(r#"model_context_window = {context_window}"#));
             }
             config_lines.push(r#"disable_response_storage = true"#.to_string());
             config_lines.push(format!(
@@ -688,10 +686,13 @@ pub async fn sync_cli_config(
                         "visibility": "list",
                         "supported_in_api": true,
                         "priority": 1,
+                        "base_instructions": "",
                         "supports_reasoning_summaries": false,
                         "support_verbosity": false,
                         "apply_patch_tool_type": "freeform",
+                        "truncation_policy": { "mode": "tokens", "limit": 10000 },
                         "supports_parallel_tool_calls": false,
+                        "experimental_supported_tools": [],
                         "context_window": caps.context_window.filter(|v| *v > 0).unwrap_or(128_000),
                     }
                 ]
@@ -744,6 +745,10 @@ pub async fn sync_cli_config(
                 .ok_or_else(|| "failed to parse opencode config object".to_string())?;
             root.entry("$schema".to_string())
                 .or_insert_with(|| serde_json::json!("https://opencode.ai/config.json"));
+            root.insert(
+                "model".to_string(),
+                serde_json::json!(format!("nyro/{}", normalized_model)),
+            );
             let provider = root
                 .entry("provider".to_string())
                 .or_insert_with(|| serde_json::json!({}));
