@@ -2,133 +2,190 @@
   <img width="120" src="docs/images/NYRO-logo.png">
 </p>
 
+<h2 align="center">Nyro AI Gateway</h2>
+
 <p align="center">
-  <strong>Nyro AI Gateway</strong>
-</p>
-<p align="center">
-  Local-first AI protocol gateway for OpenAI / Anthropic / Gemini.<br>
-  Keep your existing SDK, switch providers by configuration.
+  Run your AI coding tools on any model, from any provider.<br>
+  One gateway. All protocols. No code changes.
 </p>
 
 <p align="center">
   <a href="https://github.com/shuaijinchao/nyro/releases/latest"><img src="https://img.shields.io/github/v/release/shuaijinchao/nyro" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
-  <a href="README_CN.md"><img src="https://img.shields.io/badge/Language-%E4%B8%AD%E6%96%87-8A2BE2" alt="中文"></a>
+  <a href="README_CN.md"><img src="https://img.shields.io/badge/文档-中文-8A2BE2" alt="中文"></a>
+</p>
+
+---
+
+<p align="center">
+  <img src="docs/images/NYRO-ui-home-en.png" width="800">
 </p>
 
 ---
 
 ## What is Nyro?
 
-Nyro is a local AI protocol gateway that runs on your machine. It translates between OpenAI, Anthropic, and Gemini protocol formats so one client SDK can work with different providers.
+Nyro is a local AI gateway that sits between your AI tools and model providers. It translates protocol formats on the fly — so Claude Code, Codex CLI, Gemini CLI, OpenCode, and any client using OpenAI / Anthropic / Gemini SDKs can all route through any backend model you choose, without changing a single line of code.
 
-Nyro ships in two forms:
+Point your clients at `http://localhost:19530`. Nyro handles the rest.
 
-- **Desktop App**: Tauri-based app for macOS / Windows / Linux
-- **Server Binary**: standalone HTTP service with WebUI access
+```
+Claude Code · Codex CLI · Gemini CLI · OpenCode
+     OpenAI SDK · Anthropic SDK · Gemini SDK
+              Any HTTP API Client
+                      ↓
+              Nyro AI Gateway
+            (localhost:19530)
+                      ↓
+    OpenAI · Anthropic · Google · DeepSeek
+    MiniMax · xAI · Zhipu · Ollama · ...
+```
 
-### Why Nyro?
-
-| Principle | Meaning |
-|---|---|
-| **Local-first** | Requests and configuration stay under your control |
-| **Protocol-neutral** | Any supported client protocol can route to any supported upstream |
-| **Operational simplicity** | Manage providers, routes, logs, and stats from one UI |
-| **Production-ready defaults** | Auth, encrypted key storage, fallback, release workflows |
-
-### At a Glance
-
-- **Ingress protocols**: OpenAI, Anthropic, Gemini
-- **Response modes**: non-streaming + SSE streaming
-- **Storage**: SQLite (`sqlx`)
-- **Runtime**: Rust (`axum`, `tokio`, `reqwest`)
-- **UI stack**: React 19 + TypeScript + Vite
-- **Desktop shell**: Tauri v2 (tray, auto-start, updater)
+Nyro ships as a **desktop app** (macOS / Windows / Linux) and a **standalone server binary** for headless and self-hosted deployments.
 
 ---
 
-## Core Capabilities
+## Why Nyro?
 
-### Gateway
+**Use any model with any tool.** Claude Code expects Anthropic protocol. Codex CLI uses OpenAI Responses API. Gemini CLI speaks Gemini. Nyro translates between all three so one model can serve all your tools simultaneously.
 
-- **Multi-protocol ingress**: OpenAI / Anthropic / Gemini
-- **Any provider as target**: route to OpenAI-compatible, Anthropic, Gemini upstreams
-- **Streaming support**: full SSE passthrough/format conversion
-- **Fallback routing**: automatic failover to secondary provider on upstream failures
-- **Token and latency observability**: request-level metrics in logs and stats
+**Switch providers without touching your tools.** Change the target model or provider from Nyro's UI. Your tools never need reconfiguring.
+
+**Keep everything local.** API keys are encrypted at rest with AES-256-GCM. Requests stay on your machine. No cloud relay, no shared infrastructure.
+
+**One UI for everything.** Manage providers, routes, API keys, logs, and usage stats from a single interface — desktop app or browser.
+
+---
+
+## Screenshots
+
+## Screenshots
+
+<table>
+  <tr>
+    <td align="center" width="50%"><img src="docs/images/NYRO-ui-providers-add-en.png" height="260"><br><sub>Provider Management</sub></td>
+    <td align="center" width="50%"><img src="docs/images/NYRO-ui-routes-en.png" height="260"><br><sub>Route Configuration</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="50%"><img src="docs/images/NYRO-ui-apikeys-en.png" height="260"><br><sub>API Key Management</sub></td>
+    <td align="center" width="50%"><img src="docs/images/NYRO-ui-connect-en.png" height="260"><br><sub>Connect — Code & CLI Integration</sub></td>
+  </tr>
+</table>
+
+---
+
+## Features
+
+### Protocol Translation
+
+- **Ingress**: OpenAI (Chat Completions + Responses API), Anthropic Messages, Gemini GenerateContent
+- **Egress**: route to any OpenAI-compatible, Anthropic, or Gemini upstream
+- **Streaming**: full SSE passthrough and cross-protocol format conversion
+- **Reasoning**: `<think>` tag parsing and conversion across protocol boundaries
+- **Tool calls**: cross-protocol tool call and result format normalization
+
+### Routing
+
+- Exact match routing on `(ingress_protocol, virtual_model)` pairs
+- Virtual model names decouple client requests from actual backend models
+- Fallback routing with automatic failover on upstream errors
+- Per-route access control with API key authorization
 
 ### Security
 
-- **Encrypted API key storage**: AES-256-GCM at rest
-- **Admin and proxy auth**: independent bearer token controls
-- **Safer defaults for network exposure**: non-loopback binding requires auth keys
+- AES-256-GCM encrypted API key storage
+- Independent proxy and admin bearer token controls
+- Default-deny route authorization — keys must be explicitly bound to routes
+- Per-key quotas: RPM / TPM / TPD / RPD
 
-### Management UI
+### Management
 
-- **Provider management**: create / edit / delete providers
-- **Route management**: priority matching, model override, fallback
-- **Logs and stats**: persistent logs with charted usage insights
-- **Desktop ergonomics**: tray menu, optional auto-start, in-app updater
+- Full CRUD for providers, routes, and API keys
+- Request logs with provider, model, token, and latency detail
+- Usage charts by model and provider
+- Provider connectivity testing with live feedback
+
+### Connect — Integration
+
+**Code Integration** — select a route and copy ready-to-use examples for:
+
+| Protocol | Languages |
+|---------|---------|
+| OpenAI | Python · TypeScript · cURL |
+| Anthropic | Python · TypeScript · cURL |
+| Gemini | Python · TypeScript · cURL |
+
+**CLI Integration** — one-click config sync for AI coding tools:
+
+| Tool | Protocol |
+|------|---------|
+| Claude Code | Anthropic |
+| Codex CLI | OpenAI Responses API |
+| Gemini CLI | Gemini |
+| OpenCode | OpenAI |
+
+Nyro detects installed tools, generates the correct configuration for the selected route, and writes it with one click. Original configs are backed up automatically.
+
+### Deployment
+
+**Desktop App**
+
+| Platform | Architecture |
+|---|---|
+| macOS | Apple Silicon (aarch64) · Intel (x64) |
+| Windows | x64 · ARM64 |
+| Linux | x86\_64 · aarch64 |
+
+**Server Binary**
+
+| Platform | Architecture | Access |
+|---|---|---|
+| macOS | x86\_64 · aarch64 | Proxy `:19530` · WebUI `http://localhost:19531` |
+| Linux | x86\_64 · aarch64 | Proxy `:19530` · WebUI `http://localhost:19531` |
+| Windows | x64 · ARM64 | Proxy `:19530` · WebUI `http://localhost:19531` |
 
 ---
 
 ## Installation
 
-### Desktop App — Homebrew (macOS / Linux)
+### Desktop App
+
+**Homebrew (macOS / Linux)**
 
 ```bash
 brew tap shuaijinchao/nyro
 brew install --cask nyro
 ```
 
-### Desktop App — Shell Script
-
-**macOS / Linux**:
+**Shell Script**
 
 ```bash
+# macOS / Linux
 curl -fsSL https://raw.githubusercontent.com/shuaijinchao/nyro/master/scripts/install/install.sh | bash
-```
 
-**Windows** (PowerShell):
-
-```powershell
+# Windows (PowerShell)
 irm https://raw.githubusercontent.com/shuaijinchao/nyro/master/scripts/install/install.ps1 | iex
 ```
 
-The script auto-detects your platform, downloads the latest release, installs it, and on macOS removes the quarantine attribute to prevent the "app is damaged" dialog.
+**Manual Download**
 
-> Specify a version: `VERSION=1.0.0 bash install.sh` or `$Version = "1.0.0"` before the PowerShell command.
+Download the latest installer for your platform from [GitHub Releases](https://github.com/shuaijinchao/Nyro/releases/latest).
 
-### Desktop App — Manual Download
-
-Download installers directly from [Releases](https://github.com/shuaijinchao/nyro/releases/latest):
-
-| Platform | File |
-|---|---|
-| macOS (Apple Silicon) | `Nyro_*_aarch64.dmg` |
-| macOS (Intel) | `Nyro_*_x64.dmg` |
-| Windows (x64) | `Nyro_*_x64-setup.exe` |
-| Windows (ARM64) | `Nyro_*_arm64-setup.exe` |
-| Linux (x86_64) | `Nyro_*_amd64.AppImage` |
-| Linux (aarch64) | `Nyro_*_aarch64.AppImage` |
-
-> **macOS note**: The app is not notarized. After manual install run `sudo xattr -rd com.apple.quarantine /Applications/Nyro.app` or use the install script above.
+> **macOS**: After manual install run `sudo xattr -rd com.apple.quarantine /Applications/Nyro.app`, or use the install script which handles this automatically.
 >
-> **Windows note**: SmartScreen may show "Unknown publisher" — click "More info" → "Run anyway".
+> **Windows**: SmartScreen may show "Unknown publisher" — click **More info → Run anyway**.
 
 ### Server Binary
 
-Available binaries: `nyro-server-linux-x86_64`, `nyro-server-linux-aarch64`, `nyro-server-macos-x86_64`, `nyro-server-macos-aarch64`, `nyro-server-windows-x86_64.exe`, `nyro-server-windows-arm64.exe`
-
 ```bash
+# Download
 curl -LO https://github.com/shuaijinchao/nyro/releases/latest/download/nyro-server-linux-x86_64
-
 chmod +x nyro-server-linux-x86_64
 
-# Start with defaults (proxy :19530, admin :19531, localhost only)
+# Start (localhost only, no auth required)
 ./nyro-server-linux-x86_64
 
-# Expose to network (requires auth keys)
+# Start (network-exposed, auth required)
 ./nyro-server-linux-x86_64 \
   --proxy-host 0.0.0.0:19530 \
   --admin-host 0.0.0.0:19531 \
@@ -136,49 +193,41 @@ chmod +x nyro-server-linux-x86_64
   --admin-key YOUR_ADMIN_KEY
 ```
 
-Open `http://localhost:19531` in your browser to access the management UI.
+Available server binaries: `linux-x86_64`, `linux-aarch64`, `macos-x86_64`, `macos-aarch64`, `windows-x86_64.exe`, `windows-arm64.exe`
+
+Open `http://localhost:19531` for the management UI.
 
 ---
 
 ## Quick Start
 
-1. **Add a Provider** — go to Providers → New, enter your provider's base URL and API key
-2. **Add a Route** — go to Routes → New, set a route name, select target provider and model
-3. **Point your client** — set `base_url` to `http://127.0.0.1:19530` (and `api_key` to your proxy key if set)
-4. **Make requests** — use any OpenAI/Anthropic/Gemini SDK as normal
+**1. Add a Provider**
+
+Go to **Providers → New**. Enter your provider's Base URL and API key. Nyro auto-detects the protocol from the URL.
+
+**2. Create a Route**
+
+Go to **Routes → New**. Set a virtual model name (e.g. `gpt-4o`), select your provider and target model. Enable access control if needed.
+
+**3. Point your client at Nyro**
 
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="http://127.0.0.1:19530/v1", api_key="sk-local-proxy")
+client = OpenAI(
+    base_url="http://127.0.0.1:19530/v1",
+    api_key="your-proxy-key"  # or "no-auth" if access control is off
+)
+
 response = client.chat.completions.create(
-    model="my-route-name",
+    model="gpt-4o",  # matches your virtual model name
     messages=[{"role": "user", "content": "Hello"}]
 )
 ```
 
----
+**4. Sync your AI tools (optional)**
 
-## Build from Source
-
-**Prerequisites**: Rust stable, Node.js 20+, pnpm 9+
-
-```bash
-git clone https://github.com/shuaijinchao/nyro.git
-cd nyro
-
-# Desktop app (dev mode)
-make dev
-
-# Desktop app (release build)
-make build
-
-# Server binary only
-make server
-
-# Run checks + smoke tests
-make release-check
-```
+Go to **Connect**, select a route, and click **Sync** next to Claude Code, Codex, Gemini CLI, or OpenCode. Nyro writes the correct config automatically.
 
 ---
 
@@ -199,3 +248,5 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 ```
+
+See the full license text in [LICENSE](LICENSE).

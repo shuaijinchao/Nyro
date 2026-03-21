@@ -2,12 +2,11 @@
   <img width="120" src="docs/images/NYRO-logo.png">
 </p>
 
+<h2 align="center">Nyro AI Gateway</h2>
+
 <p align="center">
-  <strong>Nyro AI Gateway</strong>
-</p>
-<p align="center">
-  本地优先 AI 协议网关，支持 OpenAI / Anthropic / Gemini。<br>
-  保留现有 SDK，通过配置完成 Provider 切换。
+  让你的 AI 编码工具运行在任意模型、任意提供商之上。<br>
+  一个网关，兼容所有协议，无需改代码。
 </p>
 
 <p align="center">
@@ -18,117 +17,173 @@
 
 ---
 
-## 简介
-
-Nyro 是一个运行在本地的 AI 协议网关，可在 OpenAI、Anthropic、Gemini 协议之间进行转换，让一个客户端 SDK 连接多个上游提供商。
-
-Nyro 提供两种形态：
-
-- **桌面应用**：基于 Tauri，支持 macOS / Windows / Linux
-- **服务端二进制**：独立 HTTP 服务，可通过 WebUI 管理
-
-### 为什么选择 Nyro？
-
-| 原则 | 说明 |
-|---|---|
-| **本地优先** | 配置和请求由你掌控 |
-| **协议中立** | 任意支持的入口协议可路由到任意支持的上游协议 |
-| **运维简单** | 在一个 UI 中管理 Provider、路由、日志和统计 |
-| **可发布可运营** | 内置鉴权、密钥加密、Fallback、自动发布流程 |
-
-### 快速概览
-
-- **入口协议**：OpenAI、Anthropic、Gemini
-- **响应模式**：非流式 + SSE 流式
-- **存储**：SQLite（`sqlx`）
-- **运行时**：Rust（`axum`、`tokio`、`reqwest`）
-- **前端栈**：React 19 + TypeScript + Vite
-- **桌面壳**：Tauri v2（托盘、自启、自动更新）
+<p align="center">
+  <img src="docs/images/NYRO-ui-home-cn.png" width="800">
+</p>
 
 ---
 
-## 核心能力
+## Nyro 是什么？
 
-### 网关能力
+Nyro 是一个本地 AI 网关，位于你的 AI 工具与模型提供商之间。它可实时转换协议格式，因此 Claude Code、Codex CLI、Gemini CLI、OpenCode，以及任何使用 OpenAI / Anthropic / Gemini SDK 的客户端，都可以在不改一行代码的前提下，路由到你指定的任意后端模型。
 
-- **多协议入口**：OpenAI / Anthropic / Gemini
-- **任意 Provider 出口**：支持 OpenAI 兼容、Anthropic、Gemini 上游
-- **流式支持**：SSE 全链路转换与透传
-- **Fallback 路由**：上游失败时自动降级到备用 Provider
-- **可观测性**：日志中记录延迟、状态、Token 等关键指标
+将客户端指向 `http://localhost:19530`，其余交给 Nyro。
+
+```
+Claude Code · Codex CLI · Gemini CLI · OpenCode
+     OpenAI SDK · Anthropic SDK · Gemini SDK
+              任意 HTTP API 客户端
+                      ↓
+              Nyro AI Gateway
+            (localhost:19530)
+                      ↓
+   OpenAI · Anthropic · Google · DeepSeek
+    MiniMax · xAI · Zhipu · Ollama · ...
+```
+
+Nyro 同时提供 **桌面应用**（macOS / Windows / Linux）和 **独立服务端二进制**，适用于无头部署与自托管场景。
+
+---
+
+## 为什么选择 Nyro？
+
+**任意工具配任意模型。** Claude Code 使用 Anthropic 协议，Codex CLI 使用 OpenAI Responses API，Gemini CLI 使用 Gemini 协议。Nyro 可以在三者之间相互转换，让同一个模型同时服务所有工具。
+
+**切换提供商不改工具配置。** 在 Nyro UI 中更换目标模型或提供商即可，工具侧配置保持不变。
+
+**全程本地。** API Key 使用 AES-256-GCM 静态加密存储。请求仅在你的设备上流转，无云中转、无共享基础设施。
+
+**一个 UI 管全部。** 在同一界面管理提供商、路由、API Key、日志与用量统计，可在桌面应用或浏览器访问。
+
+---
+
+## 界面截图
+
+<table>
+  <tr>
+    <td align="center" width="50%"><img src="docs/images/NYRO-ui-providers-add-cn.png" height="260"><br><sub>Provider 管理</sub></td>
+    <td align="center" width="50%"><img src="docs/images/NYRO-ui-routes-cn.png" height="260"><br><sub>路由配置</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="50%"><img src="docs/images/NYRO-ui-apikeys-cn.png" height="260"><br><sub>API Key 管理</sub></td>
+    <td align="center" width="50%"><img src="docs/images/NYRO-ui-connect-cn.png" height="260"><br><sub>Connect：代码与 CLI 集成</sub></td>
+  </tr>
+</table>
+
+---
+
+## 功能特性
+
+### 协议转换
+
+- **入口协议**：OpenAI（Chat Completions + Responses API）、Anthropic Messages、Gemini GenerateContent
+- **出口协议**：可路由到任意 OpenAI 兼容、Anthropic 或 Gemini 上游
+- **流式响应**：完整 SSE 透传与跨协议格式转换
+- **推理内容**：支持 `<think>` 标签解析与跨协议转换
+- **工具调用**：跨协议 tool call 与结果格式归一化
+
+### 路由能力
+
+- 基于 `(ingress_protocol, virtual_model)` 的精确匹配路由
+- 通过虚拟模型名解耦客户端请求与真实后端模型
+- 上游异常时自动触发 Fallback 失败转移
+- 按路由进行 API Key 访问控制
 
 ### 安全能力
 
-- **API Key 加密存储**：AES-256-GCM 静态加密
-- **双层鉴权控制**：代理层和管理层独立 Bearer Token
-- **默认安全策略**：非本地绑定必须配置鉴权密钥
+- AES-256-GCM 加密存储 API Key
+- 代理层与管理层 Bearer Token 独立控制
+- 默认拒绝策略：API Key 必须显式绑定路由才可访问
+- 单 Key 配额：RPM / TPM / TPD / RPD
 
 ### 管理能力
 
-- **Provider 管理**：新增 / 编辑 / 删除
-- **路由管理**：优先级匹配、模型覆盖、Fallback
-- **日志与统计**：持久化日志 + 可视化统计看板
-- **桌面体验**：托盘菜单、可选开机自启、应用内更新
+- Provider、路由、API Key 的完整 CRUD
+- 请求日志记录 Provider、模型、Token、延迟等信息
+- 按模型与提供商的用量统计图表
+- Provider 连通性测试与实时反馈
+
+### Connect — 集成
+
+**代码集成**：选择路由后一键复制可直接使用的示例：
+
+| 协议 | 语言 |
+|---------|---------|
+| OpenAI | Python · TypeScript · cURL |
+| Anthropic | Python · TypeScript · cURL |
+| Gemini | Python · TypeScript · cURL |
+
+**CLI 集成**：一键同步 AI 编码工具配置：
+
+| 工具 | 协议 |
+|------|---------|
+| Claude Code | Anthropic |
+| Codex CLI | OpenAI Responses API |
+| Gemini CLI | Gemini |
+| OpenCode | OpenAI |
+
+Nyro 会自动检测已安装工具，为所选路由生成正确配置并一键写入，同时自动备份原始配置。
+
+### 部署形态
+
+**桌面应用**
+
+| 平台 | 架构 |
+|---|---|
+| macOS | Apple Silicon (aarch64) · Intel (x64) |
+| Windows | x64 · ARM64 |
+| Linux | x86_64 · aarch64 |
+
+**服务端二进制**
+
+| 平台 | 架构 | 访问 |
+|---|---|---|
+| macOS | x86_64 · aarch64 | Proxy `:19530` · WebUI `http://localhost:19531` |
+| Linux | x86_64 · aarch64 | Proxy `:19530` · WebUI `http://localhost:19531` |
+| Windows | x64 · ARM64 | Proxy `:19530` · WebUI `http://localhost:19531` |
 
 ---
 
 ## 安装
 
-### 桌面应用 — Homebrew（macOS / Linux）
+### 桌面应用
+
+**Homebrew（macOS / Linux）**
 
 ```bash
 brew tap shuaijinchao/nyro
 brew install --cask nyro
 ```
 
-### 桌面应用 — 脚本安装
-
-**macOS / Linux**：
+**Shell 脚本**
 
 ```bash
+# macOS / Linux
 curl -fsSL https://raw.githubusercontent.com/shuaijinchao/nyro/master/scripts/install/install.sh | bash
-```
 
-**Windows**（PowerShell）：
-
-```powershell
+# Windows (PowerShell)
 irm https://raw.githubusercontent.com/shuaijinchao/nyro/master/scripts/install/install.ps1 | iex
 ```
 
-脚本会自动检测平台、下载最新版本并完成安装。macOS 上会自动移除隔离属性，避免"应用已损坏"提示。
+**手动下载**
 
-> 指定版本：`VERSION=1.0.0 bash install.sh` 或在 PowerShell 中先设置 `$Version = "1.0.0"`。
+从 [GitHub Releases](https://github.com/shuaijinchao/Nyro/releases/latest) 下载你平台对应的最新安装包。
 
-### 桌面应用 — 手动下载
-
-从 [Releases](https://github.com/shuaijinchao/nyro/releases/latest) 下载对应平台安装包：
-
-| 平台 | 文件 |
-|---|---|
-| macOS（Apple Silicon） | `Nyro_*_aarch64.dmg` |
-| macOS（Intel） | `Nyro_*_x64.dmg` |
-| Windows（x64） | `Nyro_*_x64-setup.exe` |
-| Windows（ARM64） | `Nyro_*_arm64-setup.exe` |
-| Linux（x86_64） | `Nyro_*_amd64.AppImage` |
-| Linux（aarch64） | `Nyro_*_aarch64.AppImage` |
-
-> **macOS 提示**：应用未经公证，手动安装后请执行 `sudo xattr -rd com.apple.quarantine /Applications/Nyro.app`，或使用上方一键脚本。
+> **macOS**：手动安装后请运行 `sudo xattr -rd com.apple.quarantine /Applications/Nyro.app`，或使用安装脚本自动处理。
 >
-> **Windows 提示**：SmartScreen 可能提示"未知发布者"，点击「更多信息」→「仍要运行」即可。
+> **Windows**：若 SmartScreen 提示 "Unknown publisher"，点击 **More info → Run anyway**。
 
 ### 服务端二进制
 
-可用二进制：`nyro-server-linux-x86_64`、`nyro-server-linux-aarch64`、`nyro-server-macos-x86_64`、`nyro-server-macos-aarch64`、`nyro-server-windows-x86_64.exe`、`nyro-server-windows-arm64.exe`
-
 ```bash
+# 下载
 curl -LO https://github.com/shuaijinchao/nyro/releases/latest/download/nyro-server-linux-x86_64
-
 chmod +x nyro-server-linux-x86_64
 
-# 默认启动（代理 :19530，管理 :19531，仅本地访问）
+# 启动（仅 localhost，无需鉴权）
 ./nyro-server-linux-x86_64
 
-# 暴露到网络（必须配置鉴权 Key）
+# 启动（暴露到网络，必须鉴权）
 ./nyro-server-linux-x86_64 \
   --proxy-host 0.0.0.0:19530 \
   --admin-host 0.0.0.0:19531 \
@@ -136,49 +191,41 @@ chmod +x nyro-server-linux-x86_64
   --admin-key YOUR_ADMIN_KEY
 ```
 
-打开浏览器访问 `http://localhost:19531` 进入管理界面。
+可用服务端二进制：`linux-x86_64`、`linux-aarch64`、`macos-x86_64`、`macos-aarch64`、`windows-x86_64.exe`、`windows-arm64.exe`
+
+打开 `http://localhost:19531` 进入管理界面。
 
 ---
 
-## 快速上手
+## 快速开始
 
-1. **添加 Provider** — 进入 Providers → 新建，填写 Provider 的 base URL 和 API Key
-2. **添加路由** — 进入 Routes → 新建，填写路由名称，选择目标 Provider 和模型
-3. **配置客户端** — 将 `base_url` 设置为 `http://127.0.0.1:19530`（如设置了 proxy key，同步配置 `api_key`）
-4. **正常使用** — 使用任意 OpenAI / Anthropic / Gemini SDK 发送请求
+**1. 添加 Provider**
+
+进入 **Providers → New**，填写 Provider 的 Base URL 和 API Key。Nyro 会根据 URL 自动识别协议。
+
+**2. 创建路由**
+
+进入 **Routes → New**，设置虚拟模型名（例如 `gpt-4o`），选择 Provider 与目标模型。需要时可开启访问控制。
+
+**3. 将客户端指向 Nyro**
 
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="http://127.0.0.1:19530/v1", api_key="sk-local-proxy")
+client = OpenAI(
+    base_url="http://127.0.0.1:19530/v1",
+    api_key="your-proxy-key"  # 若关闭访问控制可用 "no-auth"
+)
+
 response = client.chat.completions.create(
-    model="my-route-name",
-    messages=[{"role": "user", "content": "你好"}]
+    model="gpt-4o",  # 对应你配置的虚拟模型名
+    messages=[{"role": "user", "content": "Hello"}]
 )
 ```
 
----
+**4. 同步你的 AI 工具（可选）**
 
-## 从源码构建
-
-**依赖**：Rust stable、Node.js 20+、pnpm 9+
-
-```bash
-git clone https://github.com/shuaijinchao/nyro.git
-cd nyro
-
-# 桌面应用（开发模式）
-make dev
-
-# 桌面应用（发布构建）
-make build
-
-# 仅构建服务端二进制
-make server
-
-# 代码检查 + 冒烟测试
-make release-check
-```
+进入 **Connect**，选择路由后点击 Claude Code、Codex、Gemini CLI 或 OpenCode 旁边的 **Sync**。Nyro 会自动写入正确配置。
 
 ---
 
@@ -199,3 +246,5 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 ```
+
+完整协议见 [LICENSE](LICENSE)。
