@@ -9,7 +9,6 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use futures::StreamExt;
-use reqwest::Url;
 use serde_json::Value;
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -18,11 +17,10 @@ use crate::logging::LogEntry;
 use crate::protocol::gemini::decoder::GeminiDecoder;
 use crate::protocol::types::*;
 use crate::protocol::Protocol;
+use crate::proxy::adapter::{self, ProviderAdapter};
 use crate::proxy::client::ProxyClient;
 use crate::storage::traits::{ApiKeyAccessRecord, UsageWindow};
 use crate::Gateway;
-
-const OLLAMA_CAPABILITY_CACHE_TTL_SECS: u64 = 3600;
 
 // ── OpenAI ingress: POST /v1/chat/completions ──
 
@@ -129,9 +127,11 @@ async fn proxy_pipeline(
     };
 
     crate::protocol::semantic::tool_correlation::normalize_request_tool_results(&mut internal);
-    maybe_strip_ollama_tools(&gw, &provider, &actual_model, &mut internal).await;
 
     let egress: Protocol = provider.protocol.parse().unwrap_or(Protocol::OpenAI);
+    let adapter = adapter::get_adapter(&provider, egress);
+
+    adapter.pre_request(&mut internal, &actual_model, &gw, &provider).await;
 
     let encoder = crate::protocol::get_encoder(egress);
     let (egress_body, extra_headers) = match encoder.encode_request(&internal) {
@@ -148,6 +148,7 @@ async fn proxy_pipeline(
         handle_stream(
             gw,
             client,
+            adapter.as_ref(),
             &provider,
             egress,
             ingress,
@@ -166,6 +167,7 @@ async fn proxy_pipeline(
         handle_non_stream(
             gw,
             client,
+            adapter.as_ref(),
             &provider,
             egress,
             ingress,
@@ -184,127 +186,11 @@ async fn proxy_pipeline(
 }
 
 
-async fn maybe_strip_ollama_tools(
-    gw: &Gateway,
-    provider: &Provider,
-    model_for_capability_check: &str,
-    req: &mut InternalRequest,
-) {
-    if !is_ollama_provider(provider) {
-        return;
-    }
-
-    if req.tools.is_none() && req.tool_choice.is_none() {
-        return;
-    }
-
-    let caps = match get_ollama_capabilities(gw, provider, model_for_capability_check).await {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!(
-                "failed to fetch capabilities for model {}, skipping tools check: {}",
-                model_for_capability_check,
-                e
-            );
-            return;
-        }
-    };
-
-    let supports_tools = caps.iter().any(|c| c == "tools");
-    if !supports_tools {
-        tracing::warn!(
-            "tools stripped for model {} (tools not supported, capabilities: {:?})",
-            model_for_capability_check,
-            caps
-        );
-        req.tools = None;
-        req.tool_choice = None;
-        req.extra.remove("tools");
-        req.extra.remove("tool_choice");
-    }
-}
-
-async fn get_ollama_capabilities(
-    gw: &Gateway,
-    provider: &Provider,
-    model: &str,
-) -> anyhow::Result<Vec<String>> {
-    let ttl = std::time::Duration::from_secs(OLLAMA_CAPABILITY_CACHE_TTL_SECS);
-    if let Some(cached) = gw
-        .get_ollama_capabilities_cached(&provider.id, model, ttl)
-        .await
-    {
-        return Ok(cached);
-    }
-
-    let caps = fetch_ollama_capabilities(&gw.http_client, &provider.base_url, model).await?;
-    gw.set_ollama_capabilities_cache(&provider.id, model, caps.clone())
-        .await;
-    Ok(caps)
-}
-
-async fn fetch_ollama_capabilities(
-    http: &reqwest::Client,
-    base_url: &str,
-    model: &str,
-) -> anyhow::Result<Vec<String>> {
-    let url = build_ollama_show_url(base_url)?;
-
-    let resp = http
-        .post(url)
-        .json(&serde_json::json!({ "name": model }))
-        .timeout(std::time::Duration::from_secs(5))
-        .send()
-        .await?;
-
-    if !resp.status().is_success() {
-        anyhow::bail!("ollama /api/show returned status {}", resp.status());
-    }
-
-    let json: Value = resp.json().await?;
-    let caps = json
-        .get("capabilities")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|c| c.as_str().map(ToString::to_string))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    Ok(caps)
-}
-
-fn build_ollama_show_url(base_url: &str) -> anyhow::Result<Url> {
-    let mut url = Url::parse(base_url)?;
-    let raw_path = url.path().trim_end_matches('/');
-    let path = if raw_path.is_empty() {
-        "/api/show".to_string()
-    } else if raw_path.ends_with("/v1") {
-        let prefix = raw_path.trim_end_matches("/v1");
-        if prefix.is_empty() {
-            "/api/show".to_string()
-        } else {
-            format!("{prefix}/api/show")
-        }
-    } else {
-        format!("{raw_path}/api/show")
-    };
-    url.set_path(&path);
-    url.set_query(None);
-    Ok(url)
-}
-
-fn is_ollama_provider(provider: &Provider) -> bool {
-    provider
-        .vendor
-        .as_deref()
-        .is_some_and(|v| v.eq_ignore_ascii_case("ollama"))
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn handle_non_stream(
     gw: Gateway,
     client: ProxyClient,
+    adapter: &dyn ProviderAdapter,
     provider: &Provider,
     egress: Protocol,
     ingress: Protocol,
@@ -320,10 +206,10 @@ async fn handle_non_stream(
 ) -> Response {
     let (resp, status) = match client
         .call_non_stream(
+            adapter,
             &provider.base_url,
             path,
             &provider.api_key,
-            egress,
             body,
             extra_headers,
         )
@@ -394,6 +280,7 @@ async fn handle_non_stream(
 async fn handle_stream(
     gw: Gateway,
     client: ProxyClient,
+    adapter: &dyn ProviderAdapter,
     provider: &Provider,
     egress: Protocol,
     ingress: Protocol,
@@ -409,10 +296,10 @@ async fn handle_stream(
 ) -> Response {
     let (resp, status) = match client
         .call_stream(
+            adapter,
             &provider.base_url,
             path,
             &provider.api_key,
-            egress,
             body,
             extra_headers,
         )
