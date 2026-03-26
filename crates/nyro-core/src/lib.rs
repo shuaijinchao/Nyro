@@ -36,10 +36,17 @@ pub struct Gateway {
     pub db: SqlitePool,
     pub storage: DynStorage,
     pub http_client: reqwest::Client,
+    proxy_client_cache: Arc<tokio::sync::RwLock<Option<ProxyClientCache>>>,
     pub route_cache: Arc<tokio::sync::RwLock<router::RouteCache>>,
     pub health_registry: Arc<HealthRegistry>,
     pub ollama_capability_cache: Arc<tokio::sync::RwLock<HashMap<String, CapabilityCacheEntry>>>,
     pub log_tx: mpsc::Sender<LogEntry>,
+}
+
+#[derive(Clone)]
+struct ProxyClientCache {
+    cache_key: String,
+    client: reqwest::Client,
 }
 
 impl Gateway {
@@ -92,6 +99,7 @@ impl Gateway {
             db,
             storage,
             http_client,
+            proxy_client_cache: Arc::new(tokio::sync::RwLock::new(None)),
             route_cache,
             health_registry,
             ollama_capability_cache,
@@ -120,6 +128,64 @@ impl Gateway {
 
     pub fn admin(&self) -> admin::AdminService {
         admin::AdminService::new(self.clone())
+    }
+
+    pub async fn http_client_for_provider(&self, use_proxy: bool) -> anyhow::Result<reqwest::Client> {
+        if !use_proxy {
+            return Ok(self.http_client.clone());
+        }
+
+        let enabled = self
+            .storage
+            .settings()
+            .get("proxy_enabled")
+            .await?
+            .as_deref()
+            .map(parse_bool_setting)
+            .unwrap_or(false);
+        if !enabled {
+            anyhow::bail!("proxy is disabled in settings");
+        }
+
+        let proxy_url = self
+            .storage
+            .settings()
+            .get("proxy_url")
+            .await?
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if proxy_url.is_empty() {
+            anyhow::bail!("proxy_url is empty");
+        }
+
+        let force_http1 = self
+            .storage
+            .settings()
+            .get("proxy_force_http1")
+            .await?
+            .as_deref()
+            .map(parse_bool_setting)
+            .unwrap_or(false);
+
+        let cache_key = format!("{proxy_url}|{force_http1}");
+        if let Some(cached) = self.proxy_client_cache.read().await.clone() {
+            if cached.cache_key == cache_key {
+                return Ok(cached.client);
+            }
+        }
+
+        let mut builder = reqwest::Client::builder().timeout(std::time::Duration::from_secs(300));
+        if force_http1 {
+            builder = builder.http1_only();
+        }
+        let client = builder.proxy(reqwest::Proxy::all(&proxy_url)?).build()?;
+
+        *self.proxy_client_cache.write().await = Some(ProxyClientCache {
+            cache_key,
+            client: client.clone(),
+        });
+        Ok(client)
     }
 
     pub async fn get_ollama_capabilities_cached(
@@ -161,6 +227,10 @@ impl Gateway {
         let mut cache = self.ollama_capability_cache.write().await;
         cache.retain(|k, _| !k.starts_with(&prefix));
     }
+}
+
+fn parse_bool_setting(value: &str) -> bool {
+    matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
 }
 
 fn to_sql_backend_config(config: &SqlStorageConfig, backend: &str) -> anyhow::Result<SqlBackendConfig> {

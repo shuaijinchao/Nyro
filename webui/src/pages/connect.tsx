@@ -195,7 +195,8 @@ const response = await client.chat.completions.create({
   messages: [{ role: "user", content: "Hello" }],
 });
 
-console.log(response.choices[0]?.message?.content);`;
+const content = response.choices[0]?.message?.content;
+return content;`;
   }
   if (protocol === "anthropic") {
     return `// npm install @anthropic-ai/sdk
@@ -212,7 +213,7 @@ const response = await client.messages.create({
   messages: [{ role: "user", content: "Hello" }],
 });
 
-console.log(response.content[0]);`;
+return response.content[0];`;
   }
   return `// npm install @google/genai
 import { GoogleGenAI } from "@google/genai";
@@ -227,7 +228,7 @@ const response = await client.models.generateContent({
   contents: "Hello",
 });
 
-console.log(response.text);`;
+return response.text;`;
 }
 
 function syntaxLanguage(language: CodeLanguage) {

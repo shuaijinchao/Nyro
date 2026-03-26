@@ -1,12 +1,10 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
 import { backend, IS_TAURI } from "@/lib/backend";
 import { localizeBackendErrorMessage } from "@/lib/backend-error";
 import type { GatewayStatus, ExportData, ImportResult } from "@/lib/types";
 import { useLocale } from "@/lib/i18n";
 import {
-  Copy,
-  Check,
   Download,
   Upload,
   Save,
@@ -14,6 +12,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 export default function SettingsPage() {
@@ -22,8 +21,6 @@ export default function SettingsPage() {
   const appVersion = import.meta.env.VITE_APP_VERSION;
 
   const qc = useQueryClient();
-  const [copied, setCopied] = useState(false);
-  const [tab, setTab] = useState<"python-openai" | "python-anthropic" | "python-gemini" | "curl">("python-openai");
   const fileRef = useRef<HTMLInputElement>(null);
   const [errorDialog, setErrorDialog] = useState<{ title: string; description?: string } | null>(null);
 
@@ -36,9 +33,31 @@ export default function SettingsPage() {
     queryKey: ["setting", "log_retention_days"],
     queryFn: () => backend("get_setting", { key: "log_retention_days" }),
   });
+  const { data: proxyEnabledSetting } = useQuery<string | null>({
+    queryKey: ["setting", "proxy_enabled"],
+    queryFn: () => backend("get_setting", { key: "proxy_enabled" }),
+  });
+  const { data: proxyUrlSetting } = useQuery<string | null>({
+    queryKey: ["setting", "proxy_url"],
+    queryFn: () => backend("get_setting", { key: "proxy_url" }),
+  });
+  const { data: proxyBypassSetting } = useQuery<string | null>({
+    queryKey: ["setting", "proxy_bypass"],
+    queryFn: () => backend("get_setting", { key: "proxy_bypass" }),
+  });
 
   const [retentionInput, setRetentionInput] = useState<string>("");
   const retentionValue = retentionInput || retentionDays || "30";
+  const [proxyEnabled, setProxyEnabled] = useState(false);
+  const [proxyUrl, setProxyUrl] = useState("");
+  const [proxyBypass, setProxyBypass] = useState("");
+
+  useEffect(() => {
+    const normalized = (proxyEnabledSetting ?? "").trim().toLowerCase();
+    setProxyEnabled(["1", "true", "yes", "on"].includes(normalized));
+    setProxyUrl(proxyUrlSetting ?? "");
+    setProxyBypass(proxyBypassSetting ?? "");
+  }, [proxyEnabledSetting, proxyUrlSetting, proxyBypassSetting]);
 
   function formatErrorMessage(error: unknown) {
     return localizeBackendErrorMessage(error, isZh);
@@ -57,6 +76,23 @@ export default function SettingsPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["setting", "log_retention_days"] }),
     onError: (error: unknown) => {
       showErrorDialog("保存设置失败", "Failed to save settings", error);
+    },
+  });
+  const saveProxySettings = useMutation({
+    mutationFn: async () => {
+      await Promise.all([
+        backend("set_setting", { key: "proxy_enabled", value: proxyEnabled ? "true" : "false" }),
+        backend("set_setting", { key: "proxy_url", value: proxyUrl.trim() }),
+        backend("set_setting", { key: "proxy_bypass", value: proxyBypass.trim() }),
+      ]);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["setting", "proxy_enabled"] });
+      qc.invalidateQueries({ queryKey: ["setting", "proxy_url"] });
+      qc.invalidateQueries({ queryKey: ["setting", "proxy_bypass"] });
+    },
+    onError: (error: unknown) => {
+      showErrorDialog("保存代理设置失败", "Failed to save proxy settings", error);
     },
   });
 
@@ -107,80 +143,12 @@ export default function SettingsPage() {
     e.target.value = "";
   }
 
-  const baseUrl = `http://127.0.0.1:${status?.proxy_port ?? 19530}`;
-
-  function copyUrl(text: string) {
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }
-
-  const tabs = [
-    { key: "python-openai" as const, label: `Python (OpenAI)` },
-    { key: "python-anthropic" as const, label: `Python (Anthropic)` },
-    { key: "python-gemini" as const, label: `Python (Gemini)` },
-    { key: "curl" as const, label: "curl" },
-  ];
-
-  const codeExamples: Record<string, string> = {
-    "python-openai": `from openai import OpenAI
-
-client = OpenAI(
-    base_url="${baseUrl}/v1",
-    api_key="sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",  # Nyro API key
-)
-
-resp = client.chat.completions.create(
-    model="gpt-4o",
-    messages=[{"role": "user", "content": "Hello!"}],
-)
-print(resp.choices[0].message.content)`,
-    "python-anthropic": `import anthropic
-
-client = anthropic.Anthropic(
-    base_url="${baseUrl}",
-    api_key="sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",  # Nyro API key
-)
-
-message = client.messages.create(
-    model="claude-sonnet-4-20250514",
-    max_tokens=1024,
-    messages=[{"role": "user", "content": "Hello!"}],
-)
-print(message.content[0].text)`,
-    "python-gemini": `import google.generativeai as genai
-from google.generativeai.client import configure
-
-# Point the SDK at the Nyro gateway
-configure(
-    api_key="sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-    client_options={"api_endpoint": "127.0.0.1:${status?.proxy_port ?? 19530}"},
-    transport="rest",
-)
-
-model = genai.GenerativeModel("gemini-2.0-flash")
-response = model.generate_content("Hello!")
-print(response.text)`,
-    curl: `# OpenAI-compatible
-curl ${baseUrl}/v1/chat/completions \\
-  -H "Content-Type: application/json" \\
-  -H "Authorization: Bearer sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" \\
-  -d '{"model":"gpt-4o","messages":[{"role":"user","content":"Hi"}]}'
-
-# Anthropic-compatible
-curl ${baseUrl}/v1/messages \\
-  -H "Content-Type: application/json" \\
-  -H "x-api-key: sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" \\
-  -H "anthropic-version: 2023-06-01" \\
-  -d '{"model":"claude-sonnet-4-20250514","max_tokens":1024,"messages":[{"role":"user","content":"Hi"}]}'`,
-  };
-
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-slate-900">{isZh ? "设置" : "Settings"}</h1>
         <p className="mt-1 text-sm text-slate-500">
-          {isZh ? "网关配置与快速开始指南" : "Gateway configuration and quick start guide"}
+          {isZh ? "网关配置" : "Gateway configuration"}
         </p>
       </div>
 
@@ -301,103 +269,58 @@ curl ${baseUrl}/v1/messages \\
               </p>
             )}
           </div>
-        </div>
-      </div>
 
-      {/* Quick Start with multi-protocol examples */}
-      <div className="glass rounded-2xl p-6 space-y-4">
-        <h2 className="text-lg font-semibold text-slate-900">{isZh ? "快速开始" : "Quick Start"}</h2>
-        <p className="text-sm text-slate-600">
-          {isZh ? "将 AI 客户端 SDK 指向以下地址即可开始代理请求：" : "Point your AI client SDK to this base URL to start proxying requests:"}
-        </p>
-        <div className="flex items-center gap-2">
-          <code className="flex-1 rounded-xl bg-slate-900 px-4 py-3 text-sm text-green-400 font-mono select-all">
-            {baseUrl}/v1
-          </code>
-          <button
-            onClick={() => copyUrl(`${baseUrl}/v1`)}
-            className="rounded-xl bg-slate-100 p-3 text-slate-600 hover:bg-slate-200 cursor-pointer transition-colors"
-          >
-            {copied ? <Check className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
-          </button>
-        </div>
-
-        <div className="space-y-3 mt-4">
-          <p className="text-xs font-semibold text-slate-700 uppercase tracking-wider">{isZh ? "使用示例" : "Usage Examples"}</p>
-          <div className="flex gap-1 border-b border-slate-200">
-            {tabs.map((t) => (
-              <button
-                key={t.key}
-                onClick={() => setTab(t.key)}
-                className={`px-3 py-2 text-xs font-medium transition-colors cursor-pointer ${
-                  tab === t.key
-                    ? "border-b-2 border-slate-900 text-slate-900"
-                    : "text-slate-500 hover:text-slate-700"
-                }`}
+          <div className="rounded-xl bg-slate-50 p-4 space-y-3 md:col-span-2">
+            <div>
+              <p className="text-sm font-medium text-slate-700">{isZh ? "本地代理" : "Local Proxy"}</p>
+              <p className="text-xs text-slate-500">
+                {isZh ? "Provider 开启代理后会使用这里的代理地址发送请求" : "Providers with proxy enabled will route requests through this proxy"}
+              </p>
+            </div>
+            <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2.5">
+              <span className="text-sm text-slate-700">{isZh ? "启用代理" : "Enable proxy"}</span>
+              <Switch checked={proxyEnabled} onCheckedChange={setProxyEnabled} />
+            </div>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div className="space-y-1.5">
+                <label className="ml-1 text-xs text-slate-700">{isZh ? "代理 URL" : "Proxy URL"}</label>
+                <Input
+                  placeholder="http://127.0.0.1:7890"
+                  value={proxyUrl}
+                  onChange={(e) => setProxyUrl(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="ml-1 text-xs text-slate-700">{isZh ? "绕过地址（可选）" : "Bypass hosts (optional)"}</label>
+                <Input
+                  placeholder={isZh ? "localhost,127.0.0.1,.internal" : "localhost,127.0.0.1,.internal"}
+                  value={proxyBypass}
+                  onChange={(e) => setProxyBypass(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                onClick={() => saveProxySettings.mutate()}
+                disabled={saveProxySettings.isPending}
+                size="sm"
+                className="flex items-center gap-1.5"
               >
-                {t.label}
-              </button>
-            ))}
-          </div>
-          <div className="rounded-xl bg-slate-50 p-4">
-            <pre className="text-xs text-slate-700 font-mono whitespace-pre-wrap">
-              {codeExamples[tab]}
-            </pre>
+                {saveProxySettings.isPending ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Save className="h-3.5 w-3.5" />
+                )}
+                {isZh ? "保存代理设置" : "Save Proxy Settings"}
+              </Button>
+              {saveProxySettings.isSuccess && (
+                <p className="text-xs text-green-600">{isZh ? "代理设置已保存" : "Proxy settings saved"}</p>
+              )}
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Setup Guide */}
-      <div className="glass rounded-2xl p-6 space-y-4">
-        <h2 className="text-lg font-semibold text-slate-900">{isZh ? "配置引导" : "Setup Guide"}</h2>
-        <div className="space-y-3">
-          {[
-            {
-              step: 1,
-              title: isZh ? "添加提供商" : "Add a Provider",
-              desc: isZh ? "前往 Providers，添加 OpenAI / Anthropic / Gemini API Key" : "Go to Providers → Add your OpenAI / Anthropic / Gemini API key",
-            },
-            {
-              step: 2,
-              title: isZh ? "创建路由" : "Create a Route",
-              desc: isZh ? "前往 Routes，配置接入协议 + 虚拟模型的精确映射" : "Go to Routes → Map ingress protocol + virtual model to a provider",
-            },
-            {
-              step: 3,
-              title: isZh ? "开始使用代理" : "Use the Proxy",
-              desc: isZh ? "将 SDK 指向上面的 Base URL 后即可请求" : "Point your SDK to the base URL above and start making requests",
-            },
-          ].map((s) => (
-            <div key={s.step} className="flex gap-4 rounded-xl bg-slate-50 p-4">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-900 text-sm font-bold text-white">
-                {s.step}
-              </div>
-              <div>
-                <p className="text-sm font-semibold text-slate-900">{s.title}</p>
-                <p className="mt-0.5 text-xs text-slate-500">{s.desc}</p>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Supported Protocols */}
-      <div className="glass rounded-2xl p-6 space-y-4">
-        <h2 className="text-lg font-semibold text-slate-900">{isZh ? "支持协议" : "Supported Protocols"}</h2>
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-          {[
-            { name: "OpenAI", endpoint: "/v1/chat/completions", desc: "GPT-4o, o1, o3-mini, DeepSeek..." },
-            { name: "Anthropic", endpoint: "/v1/messages", desc: "Claude Sonnet, Haiku, Opus..." },
-            { name: "Gemini", endpoint: "/v1beta/models/{model}:*", desc: "Gemini 2.0, 1.5 Pro..." },
-          ].map((p) => (
-            <div key={p.name} className="rounded-xl bg-slate-50 p-4">
-              <p className="text-sm font-semibold text-slate-900">{p.name}</p>
-              <code className="mt-1 block text-[11px] text-slate-500 font-mono">{p.endpoint}</code>
-              <p className="mt-1 text-xs text-slate-400">{p.desc}</p>
-            </div>
-          ))}
-        </div>
-      </div>
       <ConfirmDialog
         open={Boolean(errorDialog)}
         onOpenChange={(open) => {

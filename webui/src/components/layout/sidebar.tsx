@@ -10,10 +10,12 @@ import {
   Plug,
   ChevronLeft,
   Settings,
+  MessageSquarePlus,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useLocale } from "@/lib/i18n";
 import NyroLogo from "@/assets/logos/NYRO-logo.png";
+import { openExternalUrl } from "@/lib/open-external";
 
 const NAV_ITEMS = [
   { label: "Dashboard", path: "/", icon: LayoutDashboard },
@@ -26,6 +28,12 @@ const NAV_ITEMS = [
   { label: "Stats", path: "/stats", icon: BarChart3 },
   { type: "divider" as const },
   { label: "Settings", path: "/settings", icon: Settings },
+  {
+    label: "Feedback",
+    href: "https://github.com/shuaijinchao/Nyro/issues/new",
+    icon: MessageSquarePlus,
+    external: true as const,
+  },
 ] as const;
 
 interface SidebarProps {
@@ -59,6 +67,31 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           if ("type" in item && item.type === "divider") {
             return (
               <div key={i} className="sidebar-divider my-3 border-t border-slate-200/80" />
+            );
+          }
+          if ("external" in item && item.external) {
+            const { label, href, icon: Icon } = item as {
+              label: string;
+              href: string;
+              icon: LucideIcon;
+              external: true;
+            };
+            return (
+              <button
+                key={href}
+                onClick={() => void openExternalUrl(href)}
+                className={cn(
+                  "sidebar-item group flex w-full items-center rounded-xl py-2.5 text-[13px] font-medium transition-all duration-200 cursor-pointer text-slate-600 hover:bg-white/70 hover:text-slate-900",
+                  collapsed
+                    ? "mx-auto h-11 w-11 justify-center px-0"
+                    : "gap-3 px-3",
+                )}
+              >
+                <Icon className="h-4 w-4 shrink-0" />
+                {!collapsed && (
+                  <span>{isZh ? "反馈建议" : label}</span>
+                )}
+              </button>
             );
           }
           const { label, path, icon: Icon } = item as {
@@ -101,7 +134,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                             ? "日志"
                             : label === "Stats"
                               ? "统计"
-                              : "设置"
+                              : "系统设置"
                     : label}
                 </span>
               )}

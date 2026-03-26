@@ -64,6 +64,7 @@ impl AdminService {
                 capabilities_source: input.capabilities_source,
                 static_models: input.static_models,
                 api_key: input.api_key,
+                use_proxy: input.use_proxy,
             })
             .await
     }
@@ -103,6 +104,7 @@ impl AdminService {
             .or(current.capabilities_source);
         let static_models = input.static_models.or(current.static_models);
         let api_key = input.api_key.unwrap_or(current.api_key);
+        let use_proxy = input.use_proxy.unwrap_or(current.use_proxy);
         let is_active = input.is_active.unwrap_or(current.is_active);
         let base_url_changed = base_url != current_base_url;
 
@@ -124,6 +126,7 @@ impl AdminService {
                     capabilities_source,
                     static_models,
                     api_key: Some(api_key),
+                    use_proxy: Some(use_proxy),
                     is_active: Some(is_active),
                 },
             )
@@ -693,6 +696,7 @@ impl AdminService {
                     capabilities_source: p.capabilities_source,
                     static_models: p.static_models,
                     api_key: p.api_key,
+                    use_proxy: p.use_proxy,
                     is_active: p.is_active,
                 })
                 .collect(),
@@ -740,6 +744,7 @@ impl AdminService {
                         capabilities_source: p.capabilities_source.clone(),
                         static_models: p.static_models.clone(),
                         api_key: p.api_key.clone(),
+                        use_proxy: p.use_proxy,
                     })
                     .await
                     .is_ok()

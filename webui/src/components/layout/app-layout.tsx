@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { Outlet } from "react-router-dom";
-import { Languages, Moon, Sun } from "lucide-react";
+import { Github, Languages, Moon, Sun } from "lucide-react";
 import { Sidebar } from "./sidebar";
 import { cn } from "@/lib/utils";
 import { IS_TAURI } from "@/lib/backend";
 import { useLocale } from "@/lib/i18n";
+import { openExternalUrl } from "@/lib/open-external";
 
 const NON_DRAGGABLE_SELECTOR = [
   "[data-no-drag]",
@@ -57,6 +58,10 @@ export function AppLayout() {
     setLocale(next);
   }
 
+  async function openProjectGithub() {
+    await openExternalUrl("https://github.com/shuaijinchao/Nyro");
+  }
+
   async function handleSurfaceMouseDown(e: React.MouseEvent<HTMLElement>) {
     if (!IS_TAURI || e.button !== 0) return;
     const target = e.target as HTMLElement;
@@ -78,6 +83,13 @@ export function AppLayout() {
           <div className="native-topbar-inner">
             <div data-tauri-drag-region className="native-topbar-drag" />
             <div className="native-topbar-actions" data-no-drag>
+              <button
+                onClick={openProjectGithub}
+                className="native-action-btn"
+                title={locale === "zh-CN" ? "打开 Nyro GitHub" : "Open Nyro on GitHub"}
+              >
+                <Github className="h-4 w-4" />
+              </button>
               <button
                 onClick={toggleTheme}
                 className="native-action-btn"
@@ -101,6 +113,13 @@ export function AppLayout() {
         <div className="web-topbar">
           <div className="native-topbar-inner">
             <div className="native-topbar-actions" data-no-drag>
+              <button
+                onClick={openProjectGithub}
+                className="native-action-btn"
+                title={locale === "zh-CN" ? "打开 Nyro GitHub" : "Open Nyro on GitHub"}
+              >
+                <Github className="h-4 w-4" />
+              </button>
               <button
                 onClick={toggleTheme}
                 className="native-action-btn"

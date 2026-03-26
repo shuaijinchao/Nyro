@@ -21,7 +21,9 @@ fn get_or_create_master_key() -> anyhow::Result<[u8; 32]> {
         Err(_) => {
             let key = Aes256Gcm::generate_key(OsRng);
             let b64 = base64::engine::general_purpose::STANDARD.encode(key.as_slice());
-            let _ = entry.set_password(&b64);
+            entry
+                .set_password(&b64)
+                .map_err(|e| anyhow::anyhow!("failed to persist master key to keyring: {e}"))?;
             let mut arr = [0u8; 32];
             arr.copy_from_slice(key.as_slice());
             Ok(arr)
@@ -76,6 +78,18 @@ pub fn decrypt(ciphertext: &str) -> String {
         Ok(plaintext) => String::from_utf8(plaintext).unwrap_or_else(|_| ciphertext.to_string()),
         Err(_) => ciphertext.to_string(),
     }
+}
+
+pub fn decrypt_nested(ciphertext: &str) -> String {
+    let mut current = ciphertext.to_string();
+    for _ in 0..3 {
+        let next = decrypt(&current);
+        if next == current {
+            break;
+        }
+        current = next;
+    }
+    current
 }
 
 fn rand_nonce() -> [u8; NONCE_LEN] {

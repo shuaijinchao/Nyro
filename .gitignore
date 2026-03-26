@@ -19,6 +19,7 @@ src-tauri/icons/ios/
 *.db
 *.db-wal
 *.db-shm
+*.patch
 
 # OS
 .DS_Store

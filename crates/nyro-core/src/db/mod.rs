@@ -36,6 +36,7 @@ pub async fn migrate(pool: &SqlitePool) -> anyhow::Result<()> {
     ensure_provider_column(pool, "static_models", "TEXT").await?;
     ensure_provider_column(pool, "last_test_success", "INTEGER").await?;
     ensure_provider_column(pool, "last_test_at", "TEXT").await?;
+    ensure_provider_column(pool, "use_proxy", "INTEGER DEFAULT 0").await?;
     ensure_route_column(pool, "ingress_protocol", "TEXT").await?;
     ensure_route_column(pool, "virtual_model", "TEXT").await?;
     ensure_route_column(pool, "strategy", "TEXT DEFAULT 'weighted'").await?;
@@ -307,6 +308,7 @@ CREATE TABLE IF NOT EXISTS providers (
     capabilities_source TEXT,
     static_models TEXT,
     api_key     TEXT NOT NULL,
+    use_proxy   INTEGER DEFAULT 0,
     last_test_success INTEGER,
     last_test_at TEXT,
     is_active   INTEGER DEFAULT 1,

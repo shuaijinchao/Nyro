@@ -113,7 +113,7 @@ struct SqliteProviderStore {
 impl ProviderStore for SqliteProviderStore {
     async fn list(&self) -> anyhow::Result<Vec<Provider>> {
         Ok(sqlx::query_as::<_, Provider>(
-            "SELECT id, name, vendor, protocol, base_url, preset_key, COALESCE(channel, region) AS channel, models_endpoint, COALESCE(models_source, models_endpoint) AS models_source, capabilities_source, static_models, api_key, last_test_success, last_test_at, is_active, created_at, updated_at FROM providers ORDER BY created_at DESC",
+            "SELECT id, name, vendor, protocol, base_url, preset_key, COALESCE(channel, region) AS channel, models_endpoint, COALESCE(models_source, models_endpoint) AS models_source, capabilities_source, static_models, api_key, COALESCE(use_proxy, 0) AS use_proxy, last_test_success, last_test_at, is_active, created_at, updated_at FROM providers ORDER BY created_at DESC",
         )
         .fetch_all(&self.pool)
         .await?)
@@ -121,7 +121,7 @@ impl ProviderStore for SqliteProviderStore {
 
     async fn get(&self, id: &str) -> anyhow::Result<Option<Provider>> {
         Ok(sqlx::query_as::<_, Provider>(
-            "SELECT id, name, vendor, protocol, base_url, preset_key, COALESCE(channel, region) AS channel, models_endpoint, COALESCE(models_source, models_endpoint) AS models_source, capabilities_source, static_models, api_key, last_test_success, last_test_at, is_active, created_at, updated_at FROM providers WHERE id = ?",
+            "SELECT id, name, vendor, protocol, base_url, preset_key, COALESCE(channel, region) AS channel, models_endpoint, COALESCE(models_source, models_endpoint) AS models_source, capabilities_source, static_models, api_key, COALESCE(use_proxy, 0) AS use_proxy, last_test_success, last_test_at, is_active, created_at, updated_at FROM providers WHERE id = ?",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -133,7 +133,7 @@ impl ProviderStore for SqliteProviderStore {
         let vendor = normalize_provider_vendor(input.vendor.as_deref());
         let models_source = input.effective_models_source().map(ToString::to_string);
         sqlx::query(
-            "INSERT INTO providers (id, name, vendor, protocol, base_url, preset_key, channel, models_endpoint, models_source, capabilities_source, static_models, api_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO providers (id, name, vendor, protocol, base_url, preset_key, channel, models_endpoint, models_source, capabilities_source, static_models, api_key, use_proxy) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&input.name)
@@ -147,6 +147,7 @@ impl ProviderStore for SqliteProviderStore {
         .bind(&input.capabilities_source)
         .bind(&input.static_models)
         .bind(&input.api_key)
+        .bind(input.use_proxy)
         .execute(&self.pool)
         .await?;
         self.get(&id).await?.context("provider missing after create")
@@ -172,10 +173,11 @@ impl ProviderStore for SqliteProviderStore {
         let capabilities_source = input.capabilities_source.or(current.capabilities_source);
         let static_models = input.static_models.or(current.static_models);
         let api_key = input.api_key.unwrap_or(current.api_key);
+        let use_proxy = input.use_proxy.unwrap_or(current.use_proxy);
         let is_active = input.is_active.unwrap_or(current.is_active);
 
         sqlx::query(
-            "UPDATE providers SET name=?, vendor=?, protocol=?, base_url=?, preset_key=?, channel=?, models_endpoint=?, models_source=?, capabilities_source=?, static_models=?, api_key=?, is_active=?, updated_at=datetime('now') WHERE id=?",
+            "UPDATE providers SET name=?, vendor=?, protocol=?, base_url=?, preset_key=?, channel=?, models_endpoint=?, models_source=?, capabilities_source=?, static_models=?, api_key=?, use_proxy=?, is_active=?, updated_at=datetime('now') WHERE id=?",
         )
         .bind(name)
         .bind(vendor)
@@ -188,6 +190,7 @@ impl ProviderStore for SqliteProviderStore {
         .bind(capabilities_source)
         .bind(static_models)
         .bind(api_key)
+        .bind(use_proxy)
         .bind(is_active)
         .bind(id)
         .execute(&self.pool)

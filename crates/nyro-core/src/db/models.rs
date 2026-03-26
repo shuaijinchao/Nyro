@@ -19,6 +19,8 @@ pub struct Provider {
     pub capabilities_source: Option<String>,
     pub static_models: Option<String>,
     pub api_key: String,
+    #[serde(default)]
+    pub use_proxy: bool,
     pub last_test_success: Option<bool>,
     pub last_test_at: Option<String>,
     pub is_active: bool,
@@ -157,9 +159,11 @@ pub struct CreateProvider {
     pub capabilities_source: Option<String>,
     pub static_models: Option<String>,
     pub api_key: String,
+    #[serde(default)]
+    pub use_proxy: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct UpdateProvider {
     pub name: Option<String>,
     pub vendor: Option<String>,
@@ -176,6 +180,7 @@ pub struct UpdateProvider {
     pub capabilities_source: Option<String>,
     pub static_models: Option<String>,
     pub api_key: Option<String>,
+    pub use_proxy: Option<bool>,
     pub is_active: Option<bool>,
 }
 
@@ -346,6 +351,8 @@ pub struct ExportProvider {
     pub capabilities_source: Option<String>,
     pub static_models: Option<String>,
     pub api_key: String,
+    #[serde(default)]
+    pub use_proxy: bool,
     pub is_active: bool,
 }
 

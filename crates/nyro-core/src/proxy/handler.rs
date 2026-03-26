@@ -135,11 +135,12 @@ async fn proxy_pipeline(
             Ok(p) => p,
             Err(_) => continue,
         };
-        let actual_model = if target.model.is_empty() || target.model == "*" {
+        let selected_model = if target.model.is_empty() || target.model == "*" {
             request_model.clone()
         } else {
             target.model.clone()
         };
+        let actual_model = selected_model;
 
         let mut internal_for_target = internal.clone();
         crate::protocol::semantic::tool_correlation::normalize_request_tool_results(
@@ -160,9 +161,26 @@ async fn proxy_pipeline(
                 continue;
             }
         };
+        
         let egress_body = override_model(egress_body, &actual_model, egress);
         let egress_path = encoder.egress_path(&actual_model, is_stream);
-        let client = ProxyClient::new(gw.http_client.clone());
+        let credential = match resolve_provider_credential(&gw, &provider).await {
+            Ok(value) => value,
+            Err(e) => {
+                last_response = Some(error_response(502, &format!("provider credential error: {e}")));
+                continue;
+            }
+        };
+        let client = match gw.http_client_for_provider(provider.use_proxy).await {
+            Ok(http_client) => ProxyClient::new(http_client),
+            Err(e) => {
+                let msg = format!("provider transport error: {e}");
+                last_response = Some(error_response(502, &msg));
+                continue;
+            }
+        };
+        let mut forward_headers = adapter.auth_headers(&credential);
+        forward_headers.extend(extra_headers.clone());
         let egress_str = egress.to_string();
 
         let response = if is_stream {
@@ -174,6 +192,7 @@ async fn proxy_pipeline(
                 egress,
                 ingress,
                 &egress_path,
+                &credential,
                 egress_body,
                 extra_headers,
                 &ingress_str,
@@ -193,6 +212,7 @@ async fn proxy_pipeline(
                 egress,
                 ingress,
                 &egress_path,
+                &credential,
                 egress_body,
                 extra_headers,
                 &ingress_str,
@@ -231,6 +251,7 @@ async fn handle_non_stream(
     egress: Protocol,
     ingress: Protocol,
     path: &str,
+    credential: &str,
     body: Value,
     extra_headers: reqwest::header::HeaderMap,
     ingress_str: &str,
@@ -240,14 +261,15 @@ async fn handle_non_stream(
     api_key_id: Option<&str>,
     start: Instant,
 ) -> Response {
-    let (resp, status) = match client
+    let credential_to_use = credential.to_string();
+    let call_result = match client
         .call_non_stream(
             adapter,
             &provider.base_url,
             path,
-            &provider.api_key,
-            body,
-            extra_headers,
+            &credential_to_use,
+            body.clone(),
+            extra_headers.clone(),
         )
         .await
     {
@@ -263,6 +285,8 @@ async fn handle_non_stream(
             return error_response(502, &format!("upstream error: {e}"));
         }
     };
+    
+    let (resp, status) = call_result;
 
     if status >= 400 {
         let preview = serde_json::to_string(&resp).ok().map(|s| s.chars().take(500).collect());
@@ -321,6 +345,7 @@ async fn handle_stream(
     egress: Protocol,
     ingress: Protocol,
     path: &str,
+    credential: &str,
     body: Value,
     extra_headers: reqwest::header::HeaderMap,
     ingress_str: &str,
@@ -330,14 +355,15 @@ async fn handle_stream(
     api_key_id: Option<&str>,
     start: Instant,
 ) -> Response {
-    let (resp, status) = match client
+    let credential_to_use = credential.to_string();
+    let call_result = match client
         .call_stream(
             adapter,
             &provider.base_url,
             path,
-            &provider.api_key,
-            body,
-            extra_headers,
+            &credential_to_use,
+            body.clone(),
+            extra_headers.clone(),
         )
         .await
     {
@@ -353,6 +379,8 @@ async fn handle_stream(
             return error_response(502, &format!("upstream error: {e}"));
         }
     };
+    
+    let (resp, status) = call_result;
 
     if status >= 400 {
         let err_body: Value = resp
@@ -669,6 +697,11 @@ async fn load_route_targets(gw: &Gateway, route: &Route) -> Vec<RouteTarget> {
 
 fn is_retryable(status: u16) -> bool {
     matches!(status, 408 | 429 | 500 | 502 | 503 | 529)
+}
+
+async fn resolve_provider_credential(gw: &Gateway, provider: &Provider) -> anyhow::Result<String> {
+    let _ = gw;
+    Ok(provider.api_key.clone())
 }
 
 fn emit_log(

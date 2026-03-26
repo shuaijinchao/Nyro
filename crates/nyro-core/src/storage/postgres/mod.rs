@@ -177,7 +177,7 @@ impl ProviderStore for PostgresProviderStore {
         let vendor = normalize_provider_vendor(input.vendor.as_deref());
         let models_source = input.effective_models_source().map(ToString::to_string);
         sqlx::query(
-            "INSERT INTO providers (id, name, vendor, protocol, base_url, preset_key, channel, models_endpoint, models_source, capabilities_source, static_models, api_key) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+            "INSERT INTO providers (id, name, vendor, protocol, base_url, preset_key, channel, models_endpoint, models_source, capabilities_source, static_models, api_key, use_proxy) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
         )
         .bind(&id)
         .bind(input.name.trim())
@@ -191,6 +191,7 @@ impl ProviderStore for PostgresProviderStore {
         .bind(input.capabilities_source)
         .bind(input.static_models)
         .bind(input.api_key)
+        .bind(input.use_proxy)
         .execute(&self.pool)
         .await?;
         self.get(&id).await?.context("provider missing after create")
@@ -214,10 +215,11 @@ impl ProviderStore for PostgresProviderStore {
         let capabilities_source = input.capabilities_source.or(current.capabilities_source);
         let static_models = input.static_models.or(current.static_models);
         let api_key = input.api_key.unwrap_or(current.api_key);
+        let use_proxy = input.use_proxy.unwrap_or(current.use_proxy);
         let is_active = input.is_active.unwrap_or(current.is_active);
 
         sqlx::query(
-            "UPDATE providers SET name=$1, vendor=$2, protocol=$3, base_url=$4, preset_key=$5, channel=$6, models_endpoint=$7, models_source=$8, capabilities_source=$9, static_models=$10, api_key=$11, is_active=$12, updated_at=CURRENT_TIMESTAMP WHERE id=$13",
+            "UPDATE providers SET name=$1, vendor=$2, protocol=$3, base_url=$4, preset_key=$5, channel=$6, models_endpoint=$7, models_source=$8, capabilities_source=$9, static_models=$10, api_key=$11, use_proxy=$12, is_active=$13, updated_at=CURRENT_TIMESTAMP WHERE id=$14",
         )
         .bind(name.trim())
         .bind(vendor)
@@ -230,6 +232,7 @@ impl ProviderStore for PostgresProviderStore {
         .bind(capabilities_source)
         .bind(static_models)
         .bind(api_key)
+        .bind(use_proxy)
         .bind(is_active)
         .bind(id)
         .execute(&self.pool)
@@ -861,6 +864,9 @@ impl StorageBootstrap for PostgresBootstrap {
         sqlx::query("UPDATE routes SET strategy = 'weighted' WHERE strategy IS NULL OR btrim(strategy) = ''")
             .execute(self.adapter.pool())
             .await?;
+        sqlx::query("ALTER TABLE providers ADD COLUMN IF NOT EXISTS use_proxy BOOLEAN NOT NULL DEFAULT FALSE")
+            .execute(self.adapter.pool())
+            .await?;
         sqlx::query(
             r#"
             INSERT INTO route_targets (id, route_id, provider_id, model, weight, priority)
@@ -917,7 +923,7 @@ impl StorageBootstrap for PostgresBootstrap {
 
 fn provider_select(suffix: Option<&str>) -> String {
     let mut sql = String::from(
-        "SELECT id, name, vendor, protocol, base_url, preset_key, COALESCE(channel, region) AS channel, models_endpoint, COALESCE(models_source, models_endpoint) AS models_source, capabilities_source, static_models, api_key, last_test_success, to_char(last_test_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS last_test_at, is_active, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS created_at, to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS updated_at FROM providers",
+        "SELECT id, name, vendor, protocol, base_url, preset_key, COALESCE(channel, region) AS channel, models_endpoint, COALESCE(models_source, models_endpoint) AS models_source, capabilities_source, static_models, api_key, COALESCE(use_proxy, FALSE) AS use_proxy, last_test_success, to_char(last_test_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS last_test_at, is_active, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS created_at, to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS updated_at FROM providers",
     );
     if let Some(suffix) = suffix {
         sql.push(' ');
@@ -1032,6 +1038,7 @@ CREATE TABLE IF NOT EXISTS providers (
     capabilities_source TEXT,
     static_models TEXT,
     api_key TEXT NOT NULL,
+    use_proxy BOOLEAN NOT NULL DEFAULT FALSE,
     last_test_success BOOLEAN,
     last_test_at TIMESTAMPTZ,
     is_active BOOLEAN DEFAULT TRUE,

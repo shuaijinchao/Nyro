@@ -62,7 +62,6 @@ function resolveHTTP(cmd: string, args?: Record<string, unknown>): HTTPMapping {
         method: "GET",
         url: `${base}/providers/${args?.providerId}/model-capabilities?model=${encodeURIComponent(String(args?.model ?? ""))}`,
       };
-
     case "list_routes":
       return { method: "GET", url: `${base}/routes` };
     case "create_route":
