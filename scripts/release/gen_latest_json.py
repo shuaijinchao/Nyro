@@ -2,12 +2,12 @@
 """Generate latest.json for Tauri updater from release assets and .sig files.
 
 Usage:
-    VERSION=v0.1.0 REPO=shuaijinchao/nyro python3 scripts/gen_latest_json.py \
+    VERSION=v0.1.0 REPO=NYRO-WAY/NYRO python3 scripts/gen_latest_json.py \
         --assets-dir release-assets --output latest.json
 
 Environment variables:
     VERSION   Git tag name, e.g. v0.1.0
-    REPO      GitHub owner/repo, e.g. shuaijinchao/nyro
+    REPO      GitHub owner/repo, e.g. NYRO-WAY/NYRO
 """
 import argparse
 import json

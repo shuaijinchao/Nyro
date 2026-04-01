@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Nyro AI Gateway Install Script (Linux + macOS)
-# Usage: curl -fsSL https://raw.githubusercontent.com/shuaijinchao/nyro/master/scripts/install/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/NYRO-WAY/NYRO/master/scripts/install/install.sh | bash
 #
 # Environment variables:
 #   VERSION   - Install specific version (e.g. "1.0.0"), default: latest
@@ -14,7 +14,7 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-REPO="shuaijinchao/nyro"
+REPO="NYRO-WAY/NYRO"
 APP_NAME="Nyro"
 GITHUB_API="https://api.github.com/repos/${REPO}/releases"
 
