@@ -442,6 +442,12 @@ export default function ConnectPage() {
     setIsCliPreviewVisible(false);
   }, [selectedCliToolId]);
 
+  useEffect(() => {
+    if (tab !== "cli") return;
+    if (!selectedCliRouteId) return;
+    setIsCliPreviewVisible(true);
+  }, [selectedCliRouteId, tab]);
+
   useEffect(
     () => () => {
       if (cliFeedbackTimeoutRef.current) {
@@ -489,7 +495,7 @@ export default function ConnectPage() {
   const codeProtocol = selectedRoute?.ingress_protocol ?? "openai";
   const selectedCliTool =
     CLI_TOOLS.find((tool) => tool.id === selectedCliToolId) ?? CLI_TOOLS.find((tool) => tool.id === "claude-code")!;
-  const selectedCliReady = Boolean(cliReadyStatus[selectedCliTool.id]);
+  const selectedCliReady = IS_TAURI ? Boolean(cliReadyStatus[selectedCliTool.id]) : true;
   const cliRoutes = useMemo(
     () => routes.filter((route) => route.ingress_protocol === selectedCliTool.protocol),
     [routes, selectedCliTool.protocol],
@@ -713,16 +719,10 @@ export default function ConnectPage() {
           </TabsList>
 
           <TabsContent value="cli" className="!mt-1 space-y-4">
-            {!IS_TAURI && (
-              <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
-                {isZh ? "CLI 接入仅桌面版可用。" : "CLI integration is desktop-only."}
-              </div>
-            )}
-
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               {CLI_TOOLS.map((tool) => {
                 const active = tool.id === selectedCliToolId;
-                const isReady = Boolean(cliReadyStatus[tool.id]);
+                const isReady = IS_TAURI ? Boolean(cliReadyStatus[tool.id]) : true;
                 return (
                   <button
                     key={tool.id}
@@ -756,7 +756,11 @@ export default function ConnectPage() {
                         </div>
                       </div>
                       <Badge variant={isReady ? "success" : "secondary"}>
-                        {isReady ? (isZh ? "已就绪" : "Ready") : (isZh ? "未就绪" : "Not Ready")}
+                        {IS_TAURI
+                          ? isReady
+                            ? (isZh ? "已就绪" : "Ready")
+                            : (isZh ? "未就绪" : "Not Ready")
+                          : (isZh ? "手动配置" : "Manual setup")}
                       </Badge>
                     </div>
                   </button>
@@ -839,69 +843,77 @@ export default function ConnectPage() {
                 </div>
                 <div className="w-1/2 space-y-2">
                   <p className="ml-1 text-xs leading-none font-normal text-slate-900">
-                    {isZh ? "更新配置" : "Update Config"}
+                    {IS_TAURI ? (isZh ? "更新配置" : "Update Config") : (isZh ? "配置预览" : "Config Preview")}
                   </p>
-                  <div className="grid grid-cols-3 gap-2">
-                    <div className="space-y-1">
-                      <Button
-                        className="w-full"
-                        disabled={!canSyncCli || syncCliMut.isPending}
-                        onClick={() => {
-                          setCliActionMessage(null);
-                          setCliSuccessAction(null);
-                          syncCliMut.mutate();
-                        }}
-                      >
-                        {syncCliMut.isPending
-                          ? (isZh ? "同步中..." : "Syncing...")
-                          : cliSuccessAction === "sync"
-                            ? <Check className="h-4 w-4" />
-                            : (isZh ? "同步配置" : "Sync Config")}
-                      </Button>
-                      <p
-                        className={`min-h-5 text-xs ${
-                          cliActionMessage?.action === "sync"
-                            ? (cliActionMessage.kind === "success" ? "text-green-600" : "text-red-600")
-                            : "text-transparent"
-                        }`}
-                      >
-                        {cliActionMessage?.action === "sync" ? cliActionMessage.text : "\u00A0"}
-                      </p>
+                  {IS_TAURI ? (
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="space-y-1">
+                        <Button
+                          className="w-full"
+                          disabled={!canSyncCli || syncCliMut.isPending}
+                          onClick={() => {
+                            setCliActionMessage(null);
+                            setCliSuccessAction(null);
+                            syncCliMut.mutate();
+                          }}
+                        >
+                          {syncCliMut.isPending
+                            ? (isZh ? "同步中..." : "Syncing...")
+                            : cliSuccessAction === "sync"
+                              ? <Check className="h-4 w-4" />
+                              : (isZh ? "同步配置" : "Sync Config")}
+                        </Button>
+                        <p
+                          className={`min-h-5 text-xs ${
+                            cliActionMessage?.action === "sync"
+                              ? (cliActionMessage.kind === "success" ? "text-green-600" : "text-red-600")
+                              : "text-transparent"
+                          }`}
+                        >
+                          {cliActionMessage?.action === "sync" ? cliActionMessage.text : "\u00A0"}
+                        </p>
+                      </div>
+                      <div className="space-y-1">
+                        <Button
+                          className="w-full"
+                          disabled={restoreCliMut.isPending}
+                          onClick={() => {
+                            setCliActionMessage(null);
+                            setCliSuccessAction(null);
+                            restoreCliMut.mutate();
+                          }}
+                        >
+                          {restoreCliMut.isPending
+                            ? (isZh ? "恢复中..." : "Restoring...")
+                            : cliSuccessAction === "restore"
+                              ? <Check className="h-4 w-4" />
+                              : (isZh ? "恢复配置" : "Restore Config")}
+                        </Button>
+                        <p
+                          className={`min-h-5 text-xs ${
+                            cliActionMessage?.action === "restore"
+                              ? (cliActionMessage.kind === "success" ? "text-green-600" : "text-red-600")
+                              : "text-transparent"
+                          }`}
+                        >
+                          {cliActionMessage?.action === "restore" ? cliActionMessage.text : "\u00A0"}
+                        </p>
+                      </div>
+                      <div>
+                        <Button className="w-full" onClick={() => setIsCliPreviewVisible((prev) => !prev)}>
+                          {isCliPreviewVisible
+                            ? (isZh ? "隐藏配置" : "Hide Config")
+                            : (isZh ? "查看配置" : "View Config")}
+                        </Button>
+                      </div>
                     </div>
-                    <div className="space-y-1">
-                      <Button
-                        className="w-full"
-                        disabled={!IS_TAURI || restoreCliMut.isPending}
-                        onClick={() => {
-                          setCliActionMessage(null);
-                          setCliSuccessAction(null);
-                          restoreCliMut.mutate();
-                        }}
-                      >
-                        {restoreCliMut.isPending
-                          ? (isZh ? "恢复中..." : "Restoring...")
-                          : cliSuccessAction === "restore"
-                            ? <Check className="h-4 w-4" />
-                            : (isZh ? "恢复配置" : "Restore Config")}
-                      </Button>
-                      <p
-                        className={`min-h-5 text-xs ${
-                          cliActionMessage?.action === "restore"
-                            ? (cliActionMessage.kind === "success" ? "text-green-600" : "text-red-600")
-                            : "text-transparent"
-                        }`}
-                      >
-                        {cliActionMessage?.action === "restore" ? cliActionMessage.text : "\u00A0"}
-                      </p>
-                    </div>
-                    <div>
-                      <Button className="w-full" onClick={() => setIsCliPreviewVisible((prev) => !prev)}>
-                        {isCliPreviewVisible
-                          ? (isZh ? "隐藏配置" : "Hide Config")
-                          : (isZh ? "查看配置" : "View Config")}
-                      </Button>
-                    </div>
-                  </div>
+                  ) : (
+                    <Button className="w-full" onClick={() => setIsCliPreviewVisible((prev) => !prev)}>
+                      {isCliPreviewVisible
+                        ? (isZh ? "隐藏配置" : "Hide Config")
+                        : (isZh ? "查看配置" : "View Config")}
+                    </Button>
+                  )}
                 </div>
                 {isCliPreviewVisible && (
                   <div className="-mt-3 space-y-2">
