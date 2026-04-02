@@ -4,6 +4,29 @@ All notable changes to Nyro will be documented in this file.
 
 ---
 
+## v1.5.0
+
+> Released on 2026-04-02
+
+#### Features
+
+- **Storage backend expansion**: add multi-backend storage abstraction and server-side backend configuration support for SQLite / MySQL / PostgreSQL
+- **Multi-target routing evolution**: add multi-target route selection and weighted/priority strategy flow, and support `weight=0` as an explicit disable state
+- **Gateway protocol architecture refresh**: support multi-protocol providers, protocol-agnostic route behavior, and standalone YAML route/provider loading
+- **Proxy extensibility upgrade**: extract `ProviderAdapter` and align provider-level proxy controls for cleaner provider integration
+
+#### Improvements
+
+- **Deprecated field cleanup**: remove legacy route/provider/log/storage fields and simplify schema/query paths around active routing behavior
+- **Gateway error typing standardization**: unify proxy/auth error `type` payloads under `NYRO_*` naming for consistent client-side handling
+- **CLI integration polish**: improve web CLI config preview and sync generated Claude Code settings with `CLAUDE_CODE_NO_FLICKER=1`
+- **Repository migration alignment**: update project/release references to `NYRO-WAY` organization and align updater/release script paths
+- **Build/runtime layout cleanup**: split Docker runtime image and dev container structure for clearer CI/CD maintenance
+
+#### Tests & Docs
+
+- Refresh smoke tests and docs to match protocol-agnostic routing and the latest route/provider data model
+
 ## v1.4.0
 
 > Released on 2026-03-21
