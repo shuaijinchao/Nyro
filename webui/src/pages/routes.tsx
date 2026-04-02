@@ -66,7 +66,7 @@ function strategyLabel(value: RouteStrategy, isZh: boolean) {
 }
 
 function hasProviderModelsEndpoint(provider?: Provider) {
-  return Boolean(provider?.models_source?.trim() || provider?.models_endpoint?.trim());
+  return Boolean(provider?.models_source?.trim());
 }
 
 function withCurrentModel(options: string[], current?: string) {
@@ -215,9 +215,9 @@ function TargetRow({
           <Input
             className="bg-white"
             type="number"
-            min={1}
+            min={0}
             value={target.weight}
-            onChange={(e) => onUpdate(index, { weight: Math.max(1, Number(e.target.value || 1)) })}
+            onChange={(e) => onUpdate(index, { weight: Math.max(0, Number(e.target.value || 0)) })}
             placeholder={isZh ? "权重" : "Weight"}
           />
         ) : (

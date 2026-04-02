@@ -34,7 +34,7 @@ pub async fn bearer_auth(
             Json(serde_json::json!({
                 "error": {
                     "message": "Invalid API key",
-                    "type": "authentication_error",
+                    "type": "NYRO_AUTH_ERROR",
                     "code": "invalid_api_key"
                 }
             })),

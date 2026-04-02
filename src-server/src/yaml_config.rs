@@ -170,7 +170,6 @@ pub fn build_providers(yaml: &YamlConfig) -> Vec<Provider> {
                 protocol_endpoints: serde_json::to_string(&endpoints_json).unwrap_or_default(),
                 preset_key: None,
                 channel: None,
-                models_endpoint: None,
                 models_source: yp.models_source.clone(),
                 capabilities_source: yp.capabilities_source.clone(),
                 static_models: yp.static_models.as_ref().map(|v| v.join("\n")),
@@ -224,7 +223,6 @@ pub fn build_routes(yaml: &YamlConfig, providers: &[Provider]) -> Vec<Route> {
             Route {
                 id: route_id,
                 name: yr.name.clone(),
-                ingress_protocol: "openai".to_string(),
                 virtual_model: yr.virtual_model.clone(),
                 strategy: yr.strategy.clone(),
                 target_provider: primary.map(|t| t.provider_id.clone()).unwrap_or_default(),

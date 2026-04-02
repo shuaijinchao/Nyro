@@ -22,7 +22,7 @@ impl TargetSelector {
 }
 
 fn weighted_select(targets: &[RouteTarget]) -> Vec<SelectedTarget> {
-    let refs: Vec<&RouteTarget> = targets.iter().collect();
+    let refs: Vec<&RouteTarget> = targets.iter().filter(|target| target.weight > 0).collect();
     weighted_shuffle(&refs)
         .into_iter()
         .map(|target| SelectedTarget {

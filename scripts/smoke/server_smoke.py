@@ -410,18 +410,17 @@ def run_smoke() -> None:
 
             # Create routes.
             routes = [
-                ("nyro-chat", "openai", "nyro-chat", provider_ids["openai"], "gpt-mock"),
-                ("nyro-claude", "anthropic", "nyro-claude", provider_ids["anthropic"], "claude-mock"),
-                ("gemini-2.0-flash", "gemini", "gemini-2.0-flash", provider_ids["gemini"], "gemini-2.0-flash"),
+                ("nyro-chat", "nyro-chat", provider_ids["openai"], "gpt-mock"),
+                ("nyro-claude", "nyro-claude", provider_ids["anthropic"], "claude-mock"),
+                ("gemini-2.0-flash", "gemini-2.0-flash", provider_ids["gemini"], "gemini-2.0-flash"),
             ]
             route_ids: list[str] = []
-            for name, ingress_protocol, virtual_model, target_provider, target_model in routes:
+            for name, virtual_model, target_provider, target_model in routes:
                 status, resp = http_request(
                     "POST",
                     f"{admin_base}/api/v1/routes",
                     payload={
                         "name": name,
-                        "ingress_protocol": ingress_protocol,
                         "virtual_model": virtual_model,
                         "target_provider": target_provider,
                         "target_model": target_model,

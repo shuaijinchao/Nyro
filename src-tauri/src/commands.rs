@@ -605,6 +605,10 @@ pub async fn sync_cli_config(
                 "ANTHROPIC_DEFAULT_OPUS_MODEL".to_string(),
                 serde_json::Value::String(normalized_model.clone()),
             );
+            env_obj.insert(
+                "CLAUDE_CODE_NO_FLICKER".to_string(),
+                serde_json::Value::String("1".to_string()),
+            );
             root.insert(
                 "model".to_string(),
                 serde_json::Value::String(infer_claude_profile(&normalized_model).to_string()),

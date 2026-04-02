@@ -69,7 +69,6 @@ const emptyCreate: CreateProvider = {
   use_proxy: false,
   preset_key: "",
   channel: "",
-  models_endpoint: "",
   models_source: "",
   capabilities_source: "",
   static_models: "",
@@ -469,7 +468,6 @@ export default function ProvidersPage() {
     use_proxy: false,
     preset_key: "",
     channel: "",
-    models_endpoint: "",
     models_source: "",
     capabilities_source: "",
     static_models: "",
@@ -605,7 +603,7 @@ export default function ProvidersPage() {
         `${isZh ? "✓ 连接成功，响应" : "✓ Connectivity ok, latency"} ${connectivity.latency_ms}ms`,
       );
 
-      const modelsSource = provider.models_source?.trim() || provider.models_endpoint?.trim();
+      const modelsSource = provider.models_source?.trim();
       if (!modelsSource) {
         finish(
           { success: true, latency_ms: connectivity.latency_ms, model: undefined, error: undefined },
@@ -675,8 +673,7 @@ export default function ProvidersPage() {
       use_proxy: p.use_proxy,
       preset_key: p.preset_key || DEFAULT_PRESET_ID,
       channel: p.channel || "default",
-      models_endpoint: p.models_endpoint ?? "",
-      models_source: p.models_source ?? p.models_endpoint ?? "",
+      models_source: p.models_source ?? "",
       capabilities_source: p.capabilities_source ?? "",
       static_models: p.static_models ?? "",
       api_key: p.api_key ?? "",
@@ -704,7 +701,6 @@ export default function ProvidersPage() {
       preset_key: preset.id,
       channel: nextChannelId,
       models_source: config.modelsSource,
-      models_endpoint: config.modelsSource,
       capabilities_source: config.capabilitiesSource,
       static_models: config.staticModels,
       api_key: config.apiKey || prev.api_key,
@@ -728,7 +724,6 @@ export default function ProvidersPage() {
       protocol: nextProtocol,
       base_url: nextBaseUrl,
       models_source: config.modelsSource,
-      models_endpoint: config.modelsSource,
       capabilities_source: config.capabilitiesSource,
       static_models: config.staticModels,
       api_key: config.apiKey || prev.api_key,
@@ -762,7 +757,6 @@ export default function ProvidersPage() {
               protocol: nextProtocol,
               base_url: nextBaseUrl,
               models_source: config.modelsSource,
-              models_endpoint: config.modelsSource,
               capabilities_source: config.capabilitiesSource,
               static_models: config.staticModels,
               api_key: config.apiKey || prev.api_key,
@@ -985,7 +979,6 @@ export default function ProvidersPage() {
                       protocol: nextProtocol,
                       base_url: nextBaseUrl,
                       models_source: form.models_source,
-                      models_endpoint: form.models_source,
                       capabilities_source: config.capabilitiesSource,
                       static_models: config.staticModels,
                     });
@@ -1118,8 +1111,8 @@ export default function ProvidersPage() {
                 </FieldLabel>
                 <Input
                   placeholder={isZh ? "可选，支持 https:// 或 ai://models.dev/..." : "Optional, supports https:// or ai://models.dev/..."}
-                  value={form.models_source ?? form.models_endpoint ?? ""}
-                  onChange={(e) => setForm({ ...form, models_source: e.target.value, models_endpoint: e.target.value })}
+                  value={form.models_source ?? ""}
+                  onChange={(e) => setForm({ ...form, models_source: e.target.value })}
                 />
               </div>
               <div className="space-y-2">
@@ -1302,7 +1295,6 @@ export default function ProvidersPage() {
                             protocol: resolvedProtocol,
                             base_url: resolveDefaultBaseUrl(endpointRows, resolvedProtocol, config.baseUrl),
                             models_source: config.modelsSource,
-                            models_endpoint: config.modelsSource,
                             capabilities_source: config.capabilitiesSource,
                             static_models: config.staticModels,
                           });
@@ -1356,7 +1348,6 @@ export default function ProvidersPage() {
                             // Keep user/preset selected model discovery source stable
                             // when protocol changes.
                             models_source: editForm.models_source,
-                            models_endpoint: editForm.models_source,
                             capabilities_source: config.capabilitiesSource,
                             static_models: config.staticModels,
                           });
@@ -1489,8 +1480,8 @@ export default function ProvidersPage() {
                       </FieldLabel>
                       <Input
                         placeholder={isZh ? "可选，支持 https:// 或 ai://models.dev/..." : "Optional, supports https:// or ai://models.dev/..."}
-                        value={editForm.models_source ?? editForm.models_endpoint ?? ""}
-                        onChange={(e) => setEditForm({ ...editForm, models_source: e.target.value, models_endpoint: e.target.value })}
+                        value={editForm.models_source ?? ""}
+                        onChange={(e) => setEditForm({ ...editForm, models_source: e.target.value })}
                       />
                     </div>
                     <div className="space-y-2">
@@ -1532,7 +1523,6 @@ export default function ProvidersPage() {
                           use_proxy: Boolean(editForm.use_proxy),
                           preset_key: editForm.preset_key || undefined,
                           channel: editForm.channel || undefined,
-                          models_endpoint: editForm.models_endpoint || undefined,
                           models_source: editForm.models_source || undefined,
                           capabilities_source: editForm.capabilities_source || undefined,
                           static_models: editForm.static_models || undefined,

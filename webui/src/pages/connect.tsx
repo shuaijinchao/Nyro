@@ -280,7 +280,8 @@ function cliPreviewTemplate(params: {
     "ANTHROPIC_MODEL": "${model}",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "${model}",
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "${model}",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "${model}"
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "${model}",
+    "CLAUDE_CODE_NO_FLICKER": "1"
   },
   "model": "${inferClaudeProfile(model)}"
 }`;

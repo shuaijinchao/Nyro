@@ -19,7 +19,6 @@ pub struct LogEntry {
     pub is_stream: bool,
     pub is_tool_call: bool,
     pub error_message: Option<String>,
-    pub request_preview: Option<String>,
     pub response_preview: Option<String>,
 }
 

@@ -264,7 +264,6 @@ def write_harness(project_dir: Path) -> None:
                     base_url: format!("{upstream_base_url}/v1"),
                     preset_key: None,
                     channel: None,
-                    models_endpoint: None,
                     models_source: None,
                     capabilities_source: None,
                     static_models: None,
@@ -275,7 +274,6 @@ def write_harness(project_dir: Path) -> None:
             let route = admin
                 .create_route(CreateRoute {
                     name: format!("{backend}-smoke-route"),
-                    ingress_protocol: "openai".to_string(),
                     virtual_model: format!("{backend}-smoke-model"),
                     target_provider: provider.id.clone(),
                     target_model: "gpt-4o-mini".to_string(),

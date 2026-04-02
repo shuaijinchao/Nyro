@@ -290,7 +290,7 @@ async fn handle_non_stream(
                 api_key_id,
                 &provider.name, 502, start.elapsed().as_millis() as f64,
                 TokenUsage::default(), false, false,
-                Some(e.to_string()), None, None,
+                Some(e.to_string()), None,
             );
             return error_response(502, &format!("upstream error: {e}"));
         }
@@ -305,7 +305,7 @@ async fn handle_non_stream(
             api_key_id,
             &provider.name, status as i32, start.elapsed().as_millis() as f64,
             TokenUsage::default(), false, false,
-            preview.clone(), None, None,
+            preview.clone(), None,
         );
         return (
             StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY),
@@ -336,7 +336,7 @@ async fn handle_non_stream(
         &gw, ingress_str, egress_str, request_model, actual_model,
         api_key_id,
         &provider.name, status as i32, start.elapsed().as_millis() as f64,
-        usage, false, is_tool, None, None, response_preview,
+        usage, false, is_tool, None, response_preview,
     );
 
     (
@@ -385,7 +385,7 @@ async fn handle_stream(
                 api_key_id,
                 &provider.name, 502, start.elapsed().as_millis() as f64,
                 TokenUsage::default(), true, false,
-                Some(e.to_string()), None, None,
+                Some(e.to_string()), None,
             );
             return error_response(502, &format!("upstream error: {e}"));
         }
@@ -403,7 +403,7 @@ async fn handle_stream(
             api_key_id,
             &provider.name, status as i32, start.elapsed().as_millis() as f64,
             TokenUsage::default(), true, false,
-            Some(err_body.to_string()), None, None,
+            Some(err_body.to_string()), None,
         );
         return (
             StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY),
@@ -460,7 +460,7 @@ async fn handle_stream(
             &gw_log, &ingress_s, &egress_s, &req_model, &act_model,
             key_id.as_deref(),
             &provider_name, 200, start.elapsed().as_millis() as f64,
-            usage, true, false, None, None, None,
+            usage, true, false, None, None,
         );
     });
 
@@ -669,6 +669,20 @@ fn override_model(mut body: Value, model: &str, protocol: Protocol) -> Value {
     }
 }
 
+fn error_type_for_status(status: u16) -> &'static str {
+    match status {
+        400 => "NYRO_BAD_REQUEST",
+        401 => "NYRO_AUTH_ERROR",
+        403 => "NYRO_FORBIDDEN",
+        404 => "NYRO_NOT_FOUND",
+        429 => "NYRO_RATE_LIMIT",
+        500 => "NYRO_INTERNAL_ERROR",
+        502 => "NYRO_UPSTREAM_ERROR",
+        503 => "NYRO_SERVICE_UNAVAILABLE",
+        _ => "NYRO_GATEWAY_ERROR",
+    }
+}
+
 fn error_response(status: u16, message: &str) -> Response {
     let code = StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     (
@@ -676,7 +690,7 @@ fn error_response(status: u16, message: &str) -> Response {
         Json(serde_json::json!({
             "error": {
                 "message": message,
-                "type": "gateway_error",
+                "type": error_type_for_status(status),
                 "code": status
             }
         })),
@@ -729,7 +743,6 @@ fn emit_log(
     is_stream: bool,
     is_tool_call: bool,
     error_message: Option<String>,
-    request_preview: Option<String>,
     response_preview: Option<String>,
 ) {
     let _ = gw.log_tx.try_send(LogEntry {
@@ -745,7 +758,6 @@ fn emit_log(
         is_stream,
         is_tool_call,
         error_message,
-        request_preview,
         response_preview,
     });
 }

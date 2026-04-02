@@ -86,7 +86,7 @@ Nyro ships as a **desktop app** (macOS / Windows / Linux) and a **standalone ser
 
 ### Routing
 
-- Exact match routing on `(ingress_protocol, virtual_model)` pairs
+- Exact match routing on `virtual_model`
 - Virtual model names decouple client requests from actual backend models
 - Fallback routing with automatic failover on upstream errors
 - Per-route access control with API key authorization

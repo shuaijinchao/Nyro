@@ -17,10 +17,7 @@ pub struct Provider {
     #[serde(default)]
     pub protocol_endpoints: String,
     pub preset_key: Option<String>,
-    #[serde(alias = "region")]
     pub channel: Option<String>,
-    /// Deprecated compatibility field. Use models_source.
-    pub models_endpoint: Option<String>,
     #[serde(alias = "modelsEndpoint")]
     pub models_source: Option<String>,
     #[serde(alias = "capabilitiesSource")]
@@ -40,7 +37,6 @@ pub struct Provider {
 pub struct Route {
     pub id: String,
     pub name: String,
-    pub ingress_protocol: String,
     pub virtual_model: String,
     pub strategy: String,
     pub target_provider: String,
@@ -146,7 +142,6 @@ pub struct RequestLog {
     pub is_stream: bool,
     pub is_tool_call: bool,
     pub error_message: Option<String>,
-    pub request_preview: Option<String>,
     pub response_preview: Option<String>,
 }
 
@@ -160,10 +155,7 @@ pub struct CreateProvider {
     /// JSON map: `{"openai":{"base_url":"..."}}`
     pub protocol_endpoints: Option<String>,
     pub preset_key: Option<String>,
-    #[serde(alias = "region")]
     pub channel: Option<String>,
-    /// Deprecated compatibility field. Use models_source.
-    pub models_endpoint: Option<String>,
     #[serde(alias = "modelsSource")]
     pub models_source: Option<String>,
     #[serde(alias = "capabilitiesSource")]
@@ -183,10 +175,7 @@ pub struct UpdateProvider {
     pub default_protocol: Option<String>,
     pub protocol_endpoints: Option<String>,
     pub preset_key: Option<String>,
-    #[serde(alias = "region")]
     pub channel: Option<String>,
-    /// Deprecated compatibility field. Use models_source.
-    pub models_endpoint: Option<String>,
     #[serde(alias = "modelsSource")]
     pub models_source: Option<String>,
     #[serde(alias = "capabilitiesSource")]
@@ -200,7 +189,6 @@ pub struct UpdateProvider {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateRoute {
     pub name: Option<String>,
-    pub ingress_protocol: Option<String>,
     pub virtual_model: Option<String>,
     pub strategy: Option<String>,
     pub target_provider: Option<String>,
@@ -214,7 +202,6 @@ pub struct UpdateRoute {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateRoute {
     pub name: String,
-    pub ingress_protocol: String,
     pub virtual_model: String,
     pub strategy: Option<String>,
     pub target_provider: String,
@@ -358,10 +345,7 @@ pub struct ExportProvider {
     #[serde(default)]
     pub protocol_endpoints: String,
     pub preset_key: Option<String>,
-    #[serde(alias = "region")]
     pub channel: Option<String>,
-    /// Deprecated compatibility field. Use models_source.
-    pub models_endpoint: Option<String>,
     #[serde(alias = "modelsEndpoint")]
     pub models_source: Option<String>,
     #[serde(alias = "capabilitiesSource")]
@@ -376,11 +360,7 @@ pub struct ExportProvider {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportRoute {
     pub name: String,
-    #[serde(default = "default_ingress_protocol")]
-    pub ingress_protocol: String,
-    #[serde(alias = "match_pattern")]
     pub virtual_model: String,
-    pub target_provider_name: String,
     pub target_model: String,
     #[serde(default)]
     pub access_control: bool,
@@ -394,16 +374,11 @@ pub struct ImportResult {
     pub settings_imported: u32,
 }
 
-fn default_ingress_protocol() -> String {
-    "openai".to_string()
-}
-
 impl Provider {
     pub fn effective_models_source(&self) -> Option<&str> {
         self.models_source
             .as_deref()
             .filter(|v| !v.trim().is_empty())
-            .or_else(|| self.models_endpoint.as_deref().filter(|v| !v.trim().is_empty()))
     }
 
     /// Resolve effective default_protocol: new field > legacy `protocol`.
@@ -449,7 +424,6 @@ impl CreateProvider {
         self.models_source
             .as_deref()
             .filter(|v| !v.trim().is_empty())
-            .or_else(|| self.models_endpoint.as_deref().filter(|v| !v.trim().is_empty()))
     }
 }
 
@@ -458,6 +432,5 @@ impl UpdateProvider {
         self.models_source
             .as_deref()
             .filter(|v| !v.trim().is_empty())
-            .or_else(|| self.models_endpoint.as_deref().filter(|v| !v.trim().is_empty()))
     }
 }

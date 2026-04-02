@@ -16,7 +16,7 @@ use crate::storage::sql::pool::RelationalPool;
 use crate::storage::traits::{
     ApiKeyAccessRecord, ApiKeyStore, AuthAccessStore, DynStorage, LogStore, ProviderStore,
     ProviderTestResult, RouteSnapshotStore, RouteStore, RouteTargetStore, SettingsStore, Storage,
-    StorageBackend, StorageBootstrap, StorageCapabilities, StorageHealth, UsageWindow,
+    StorageBackend, StorageBootstrap, StorageHealth, UsageWindow,
 };
 
 #[derive(Clone)]
@@ -187,7 +187,7 @@ impl ProviderStore for MySqlProviderStore {
             .unwrap_or(input.protocol.as_str());
         let protocol_endpoints = input.protocol_endpoints.as_deref().unwrap_or("{}");
         sqlx::query(
-            "INSERT INTO providers (id, name, vendor, protocol, base_url, default_protocol, protocol_endpoints, preset_key, channel, models_endpoint, models_source, capabilities_source, static_models, api_key, use_proxy, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP())",
+            "INSERT INTO providers (id, name, vendor, protocol, base_url, default_protocol, protocol_endpoints, preset_key, channel, models_source, capabilities_source, static_models, api_key, use_proxy, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP())",
         )
         .bind(&id)
         .bind(input.name.trim())
@@ -198,7 +198,6 @@ impl ProviderStore for MySqlProviderStore {
         .bind(protocol_endpoints)
         .bind(input.preset_key)
         .bind(input.channel)
-        .bind(models_source.clone())
         .bind(models_source)
         .bind(input.capabilities_source)
         .bind(input.static_models)
@@ -219,7 +218,7 @@ impl ProviderStore for MySqlProviderStore {
             normalize_provider_vendor(current.vendor.as_deref())
         };
         let models_source = models_source_input
-            .or_else(|| current.models_source.clone().or(current.models_endpoint.clone()));
+            .or_else(|| current.models_source.clone());
         let protocol = input.protocol.unwrap_or(current.protocol.clone());
         let base_url = input.base_url.unwrap_or(current.base_url);
         let default_protocol = input
@@ -237,7 +236,7 @@ impl ProviderStore for MySqlProviderStore {
         let is_active = input.is_active.unwrap_or(current.is_active);
 
         sqlx::query(
-            "UPDATE providers SET name=?, vendor=?, protocol=?, base_url=?, default_protocol=?, protocol_endpoints=?, preset_key=?, channel=?, models_endpoint=?, models_source=?, capabilities_source=?, static_models=?, api_key=?, use_proxy=?, is_active=?, updated_at=UTC_TIMESTAMP() WHERE id=?",
+            "UPDATE providers SET name=?, vendor=?, protocol=?, base_url=?, default_protocol=?, protocol_endpoints=?, preset_key=?, channel=?, models_source=?, capabilities_source=?, static_models=?, api_key=?, use_proxy=?, is_active=?, updated_at=UTC_TIMESTAMP() WHERE id=?",
         )
         .bind(name.trim())
         .bind(vendor)
@@ -247,7 +246,6 @@ impl ProviderStore for MySqlProviderStore {
         .bind(protocol_endpoints)
         .bind(preset_key)
         .bind(channel)
-        .bind(models_source.clone())
         .bind(models_source)
         .bind(capabilities_source)
         .bind(static_models)
@@ -324,15 +322,12 @@ impl RouteStore for MySqlRouteStore {
 
     async fn create(&self, input: CreateRoute) -> anyhow::Result<Route> {
         let id = uuid::Uuid::new_v4().to_string();
-        let ingress_protocol = input.ingress_protocol.trim().to_lowercase();
         let virtual_model = input.virtual_model.trim().to_string();
         sqlx::query(
-            "INSERT INTO routes (id, name, ingress_protocol, virtual_model, match_pattern, strategy, target_provider, target_model, access_control, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP())",
+            "INSERT INTO routes (id, name, virtual_model, strategy, target_provider, target_model, access_control, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP())",
         )
         .bind(&id)
         .bind(input.name.trim())
-        .bind(ingress_protocol)
-        .bind(&virtual_model)
         .bind(&virtual_model)
         .bind(input.strategy.unwrap_or_else(|| "weighted".to_string()))
         .bind(input.target_provider.trim())
@@ -346,11 +341,6 @@ impl RouteStore for MySqlRouteStore {
     async fn update(&self, id: &str, input: UpdateRoute) -> anyhow::Result<Route> {
         let current = self.get(id).await?.context("route not found for update")?;
         let name = input.name.unwrap_or(current.name);
-        let ingress_protocol = input
-            .ingress_protocol
-            .unwrap_or(current.ingress_protocol)
-            .trim()
-            .to_lowercase();
         let virtual_model = input
             .virtual_model
             .unwrap_or(current.virtual_model)
@@ -363,11 +353,9 @@ impl RouteStore for MySqlRouteStore {
         let is_active = input.is_active.unwrap_or(current.is_active);
 
         sqlx::query(
-            "UPDATE routes SET name=?, ingress_protocol=?, virtual_model=?, match_pattern=?, strategy=?, target_provider=?, target_model=?, access_control=?, is_active=? WHERE id=?",
+            "UPDATE routes SET name=?, virtual_model=?, strategy=?, target_provider=?, target_model=?, access_control=?, is_active=? WHERE id=?",
         )
         .bind(name.trim())
-        .bind(ingress_protocol)
-        .bind(&virtual_model)
         .bind(&virtual_model)
         .bind(strategy.trim().to_lowercase())
         .bind(target_provider.trim())
@@ -408,35 +396,6 @@ impl RouteStore for MySqlRouteStore {
         Ok(row.is_some())
     }
 
-    async fn exists_by_protocol_model(
-        &self,
-        ingress_protocol: &str,
-        virtual_model: &str,
-        exclude_id: Option<&str>,
-    ) -> anyhow::Result<bool> {
-        let normalized_protocol = ingress_protocol.trim().to_lowercase();
-        let normalized_model = virtual_model.trim();
-        let row = if let Some(exclude_id) = exclude_id {
-            sqlx::query_scalar::<_, String>(
-                "SELECT id FROM routes WHERE COALESCE(ingress_protocol, 'openai') = ? AND COALESCE(NULLIF(virtual_model, ''), match_pattern) = ? AND id != ? LIMIT 1",
-            )
-            .bind(&normalized_protocol)
-            .bind(normalized_model)
-            .bind(exclude_id)
-            .fetch_optional(&self.pool)
-            .await?
-        } else {
-            sqlx::query_scalar::<_, String>(
-                "SELECT id FROM routes WHERE COALESCE(ingress_protocol, 'openai') = ? AND COALESCE(NULLIF(virtual_model, ''), match_pattern) = ? LIMIT 1",
-            )
-            .bind(&normalized_protocol)
-            .bind(normalized_model)
-            .fetch_optional(&self.pool)
-            .await?
-        };
-        Ok(row.is_some())
-    }
-
     async fn exists_by_virtual_model(
         &self,
         virtual_model: &str,
@@ -445,7 +404,7 @@ impl RouteStore for MySqlRouteStore {
         let normalized_model = virtual_model.trim();
         let row = if let Some(exclude_id) = exclude_id {
             sqlx::query_scalar::<_, String>(
-                "SELECT id FROM routes WHERE COALESCE(NULLIF(virtual_model, ''), match_pattern) = ? AND id != ? LIMIT 1",
+                "SELECT id FROM routes WHERE virtual_model = ? AND id != ? LIMIT 1",
             )
             .bind(normalized_model)
             .bind(exclude_id)
@@ -453,7 +412,7 @@ impl RouteStore for MySqlRouteStore {
             .await?
         } else {
             sqlx::query_scalar::<_, String>(
-                "SELECT id FROM routes WHERE COALESCE(NULLIF(virtual_model, ''), match_pattern) = ? LIMIT 1",
+                "SELECT id FROM routes WHERE virtual_model = ? LIMIT 1",
             )
             .bind(normalized_model)
             .fetch_optional(&self.pool)
@@ -462,9 +421,6 @@ impl RouteStore for MySqlRouteStore {
         Ok(row.is_some())
     }
 
-    async fn list_active(&self) -> anyhow::Result<Vec<Route>> {
-        self.load_active_snapshot().await
-    }
 }
 
 #[async_trait]
@@ -513,7 +469,7 @@ impl RouteTargetStore for MySqlRouteTargetStore {
             .bind(route_id)
             .bind(target.provider_id.trim())
             .bind(target.model.trim())
-            .bind(target.weight.unwrap_or(100).max(1))
+            .bind(target.weight.unwrap_or(100).max(0))
             .bind(target.priority.unwrap_or(1).max(1))
             .execute(&mut *tx)
             .await?;
@@ -764,8 +720,8 @@ impl LogStore for MySqlLogStore {
                 r#"INSERT INTO request_logs
                     (id, created_at, api_key_id, ingress_protocol, egress_protocol, request_model, actual_model,
                      provider_name, status_code, duration_ms, input_tokens, output_tokens,
-                     is_stream, is_tool_call, error_message, request_preview, response_preview)
-                VALUES (?, UTC_TIMESTAMP(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+                     is_stream, is_tool_call, error_message, response_preview)
+                VALUES (?, UTC_TIMESTAMP(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
             )
             .bind(&id)
             .bind(&entry.api_key_id)
@@ -781,7 +737,6 @@ impl LogStore for MySqlLogStore {
             .bind(entry.is_stream)
             .bind(entry.is_tool_call)
             .bind(&entry.error_message)
-            .bind(&entry.request_preview)
             .bind(&entry.response_preview)
             .execute(&self.pool)
             .await?;
@@ -792,7 +747,7 @@ impl LogStore for MySqlLogStore {
     async fn query(&self, query: LogQuery) -> anyhow::Result<LogPage> {
         let mut count_sql = String::from("SELECT COUNT(*) AS total FROM request_logs WHERE 1=1");
         let mut data_sql = String::from(
-            "SELECT id, DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS created_at, api_key_id, ingress_protocol, egress_protocol, request_model, actual_model, provider_name, status_code, duration_ms, input_tokens, output_tokens, is_stream, is_tool_call, error_message, request_preview, response_preview FROM request_logs WHERE 1=1",
+            "SELECT id, DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS created_at, api_key_id, ingress_protocol, egress_protocol, request_model, actual_model, provider_name, status_code, duration_ms, input_tokens, output_tokens, is_stream, is_tool_call, error_message, response_preview FROM request_logs WHERE 1=1",
         );
         let mut bind_values: Vec<String> = Vec::new();
 
@@ -954,25 +909,6 @@ impl StorageBootstrap for MySqlBootstrap {
         )
         .execute(self.adapter.pool())
         .await?;
-        sqlx::query(
-            r#"
-            INSERT INTO route_targets (id, route_id, provider_id, model, weight, priority, created_at)
-            SELECT LOWER(REPLACE(UUID(), '-', '')), r.id, r.fallback_provider, COALESCE(NULLIF(r.fallback_model, ''), r.target_model), 100, 2, UTC_TIMESTAMP()
-            FROM routes r
-            WHERE r.fallback_provider IS NOT NULL
-              AND TRIM(r.fallback_provider) != ''
-              AND NOT EXISTS (
-                  SELECT 1 FROM route_targets rt WHERE rt.route_id = r.id AND rt.priority = 2
-              )
-            "#,
-        )
-        .execute(self.adapter.pool())
-        .await?;
-        sqlx::query(
-            "UPDATE routes SET strategy = 'priority' WHERE fallback_provider IS NOT NULL AND TRIM(fallback_provider) != '' AND (strategy IS NULL OR strategy = '' OR strategy = 'weighted')",
-        )
-        .execute(self.adapter.pool())
-        .await?;
         Ok(())
     }
 
@@ -986,19 +922,11 @@ impl StorageBootstrap for MySqlBootstrap {
         })
     }
 
-    fn capabilities(&self) -> StorageCapabilities {
-        StorageCapabilities {
-            transactions: true,
-            batch_writes: true,
-            aggregations: true,
-            managed_migrations: true,
-        }
-    }
 }
 
 fn provider_select(suffix: Option<&str>) -> String {
     let mut sql = String::from(
-        "SELECT id, name, vendor, protocol, base_url, COALESCE(default_protocol, protocol) AS default_protocol, COALESCE(protocol_endpoints, '{}') AS protocol_endpoints, preset_key, COALESCE(channel, region) AS channel, models_endpoint, COALESCE(models_source, models_endpoint) AS models_source, capabilities_source, static_models, api_key, COALESCE(use_proxy, FALSE) AS use_proxy, last_test_success, DATE_FORMAT(last_test_at, '%Y-%m-%d %H:%i:%s') AS last_test_at, is_active, DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS created_at, DATE_FORMAT(updated_at, '%Y-%m-%d %H:%i:%s') AS updated_at FROM providers",
+        "SELECT id, name, vendor, protocol, base_url, COALESCE(default_protocol, protocol) AS default_protocol, COALESCE(protocol_endpoints, '{}') AS protocol_endpoints, preset_key, channel, models_source, capabilities_source, static_models, api_key, COALESCE(use_proxy, FALSE) AS use_proxy, last_test_success, DATE_FORMAT(last_test_at, '%Y-%m-%d %H:%i:%s') AS last_test_at, is_active, DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS created_at, DATE_FORMAT(updated_at, '%Y-%m-%d %H:%i:%s') AS updated_at FROM providers",
     );
     if let Some(suffix) = suffix {
         sql.push(' ');
@@ -1011,7 +939,7 @@ fn provider_select(suffix: Option<&str>) -> String {
 
 fn route_select(suffix: Option<&str>) -> String {
     let mut sql = String::from(
-        "SELECT id, name, COALESCE(ingress_protocol, 'openai') AS ingress_protocol, COALESCE(NULLIF(virtual_model, ''), match_pattern) AS virtual_model, COALESCE(strategy, 'weighted') AS strategy, target_provider, target_model, COALESCE(access_control, FALSE) AS access_control, is_active, DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS created_at FROM routes",
+        "SELECT id, name, virtual_model, COALESCE(strategy, 'weighted') AS strategy, target_provider, target_model, COALESCE(access_control, FALSE) AS access_control, is_active, DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS created_at FROM routes",
     );
     if let Some(suffix) = suffix {
         sql.push(' ');
@@ -1141,9 +1069,7 @@ CREATE TABLE IF NOT EXISTS providers (
     protocol VARCHAR(64) NOT NULL,
     base_url TEXT NOT NULL,
     preset_key VARCHAR(255) NULL,
-    region VARCHAR(128) NULL,
     channel VARCHAR(128) NULL,
-    models_endpoint TEXT NULL,
     models_source TEXT NULL,
     capabilities_source TEXT NULL,
     static_models LONGTEXT NULL,
@@ -1160,20 +1086,15 @@ CREATE TABLE IF NOT EXISTS providers (
 CREATE TABLE IF NOT EXISTS routes (
     id VARCHAR(64) PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
-    match_pattern VARCHAR(255) NOT NULL,
-    ingress_protocol VARCHAR(64) NULL,
     virtual_model VARCHAR(255) NULL,
     strategy VARCHAR(32) NULL,
     target_provider VARCHAR(64) NOT NULL,
     target_model VARCHAR(255) NOT NULL,
-    fallback_provider VARCHAR(64) NULL,
-    fallback_model VARCHAR(255) NULL,
     access_control BOOLEAN NOT NULL DEFAULT FALSE,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     priority INT NOT NULL DEFAULT 0,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fk_routes_target_provider FOREIGN KEY (target_provider) REFERENCES providers(id),
-    CONSTRAINT fk_routes_fallback_provider FOREIGN KEY (fallback_provider) REFERENCES providers(id)
+    CONSTRAINT fk_routes_target_provider FOREIGN KEY (target_provider) REFERENCES providers(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS route_targets (
@@ -1206,7 +1127,6 @@ CREATE TABLE IF NOT EXISTS request_logs (
     is_stream BOOLEAN NOT NULL DEFAULT FALSE,
     is_tool_call BOOLEAN NOT NULL DEFAULT FALSE,
     error_message TEXT NULL,
-    request_preview LONGTEXT NULL,
     response_preview LONGTEXT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

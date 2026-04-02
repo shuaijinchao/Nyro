@@ -41,8 +41,6 @@ function resolveHTTP(cmd: string, args?: Record<string, unknown>): HTTPMapping {
   switch (cmd) {
     case "get_providers":
       return { method: "GET", url: `${base}/providers` };
-    case "get_provider":
-      return { method: "GET", url: `${base}/providers/${args?.id}` };
     case "get_provider_presets":
       return { method: "GET", url: `${base}/providers/presets` };
     case "create_provider":
@@ -73,8 +71,6 @@ function resolveHTTP(cmd: string, args?: Record<string, unknown>): HTTPMapping {
 
     case "list_api_keys":
       return { method: "GET", url: `${base}/api-keys` };
-    case "get_api_key":
-      return { method: "GET", url: `${base}/api-keys/${args?.id}` };
     case "create_api_key":
       return { method: "POST", url: `${base}/api-keys`, body: args?.input as Record<string, unknown> };
     case "update_api_key":

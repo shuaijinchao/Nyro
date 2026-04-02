@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use async_trait::async_trait;
+use sqlx::Row;
 use sqlx::SqlitePool;
 
 use crate::config::GatewayConfig;
@@ -15,7 +16,7 @@ use crate::logging::LogEntry;
 use crate::storage::traits::{
     ApiKeyAccessRecord, ApiKeyStore, AuthAccessStore, LogStore, ProviderStore, ProviderTestResult,
     RouteSnapshotStore, RouteStore, RouteTargetStore, SettingsStore, Storage, StorageBackend,
-    StorageBootstrap, StorageCapabilities, StorageHealth, UsageWindow,
+    StorageBootstrap, StorageHealth, UsageWindow,
 };
 
 #[derive(Clone)]
@@ -113,7 +114,7 @@ struct SqliteProviderStore {
 impl ProviderStore for SqliteProviderStore {
     async fn list(&self) -> anyhow::Result<Vec<Provider>> {
         Ok(sqlx::query_as::<_, Provider>(
-            "SELECT id, name, vendor, protocol, base_url, COALESCE(default_protocol, protocol) AS default_protocol, COALESCE(protocol_endpoints, '{}') AS protocol_endpoints, preset_key, COALESCE(channel, region) AS channel, models_endpoint, COALESCE(models_source, models_endpoint) AS models_source, capabilities_source, static_models, api_key, COALESCE(use_proxy, 0) AS use_proxy, last_test_success, last_test_at, is_active, created_at, updated_at FROM providers ORDER BY created_at DESC",
+            "SELECT id, name, vendor, protocol, base_url, COALESCE(default_protocol, protocol) AS default_protocol, COALESCE(protocol_endpoints, '{}') AS protocol_endpoints, preset_key, channel, models_source, capabilities_source, static_models, api_key, COALESCE(use_proxy, 0) AS use_proxy, last_test_success, last_test_at, is_active, created_at, updated_at FROM providers ORDER BY created_at DESC",
         )
         .fetch_all(&self.pool)
         .await?)
@@ -121,7 +122,7 @@ impl ProviderStore for SqliteProviderStore {
 
     async fn get(&self, id: &str) -> anyhow::Result<Option<Provider>> {
         Ok(sqlx::query_as::<_, Provider>(
-            "SELECT id, name, vendor, protocol, base_url, COALESCE(default_protocol, protocol) AS default_protocol, COALESCE(protocol_endpoints, '{}') AS protocol_endpoints, preset_key, COALESCE(channel, region) AS channel, models_endpoint, COALESCE(models_source, models_endpoint) AS models_source, capabilities_source, static_models, api_key, COALESCE(use_proxy, 0) AS use_proxy, last_test_success, last_test_at, is_active, created_at, updated_at FROM providers WHERE id = ?",
+            "SELECT id, name, vendor, protocol, base_url, COALESCE(default_protocol, protocol) AS default_protocol, COALESCE(protocol_endpoints, '{}') AS protocol_endpoints, preset_key, channel, models_source, capabilities_source, static_models, api_key, COALESCE(use_proxy, 0) AS use_proxy, last_test_success, last_test_at, is_active, created_at, updated_at FROM providers WHERE id = ?",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -138,7 +139,7 @@ impl ProviderStore for SqliteProviderStore {
             .unwrap_or(input.protocol.as_str());
         let protocol_endpoints = input.protocol_endpoints.as_deref().unwrap_or("{}");
         sqlx::query(
-            "INSERT INTO providers (id, name, vendor, protocol, base_url, default_protocol, protocol_endpoints, preset_key, channel, models_endpoint, models_source, capabilities_source, static_models, api_key, use_proxy) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO providers (id, name, vendor, protocol, base_url, default_protocol, protocol_endpoints, preset_key, channel, models_source, capabilities_source, static_models, api_key, use_proxy) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&input.name)
@@ -149,7 +150,6 @@ impl ProviderStore for SqliteProviderStore {
         .bind(protocol_endpoints)
         .bind(&input.preset_key)
         .bind(&input.channel)
-        .bind(&models_source)
         .bind(&models_source)
         .bind(&input.capabilities_source)
         .bind(&input.static_models)
@@ -172,7 +172,7 @@ impl ProviderStore for SqliteProviderStore {
             normalize_provider_vendor(current.vendor.as_deref())
         };
         let models_source = models_source_input
-            .or_else(|| current.models_source.clone().or(current.models_endpoint.clone()));
+            .or_else(|| current.models_source.clone());
         let protocol = input.protocol.unwrap_or(current.protocol.clone());
         let base_url = input.base_url.unwrap_or(current.base_url);
         let default_protocol = input
@@ -190,7 +190,7 @@ impl ProviderStore for SqliteProviderStore {
         let is_active = input.is_active.unwrap_or(current.is_active);
 
         sqlx::query(
-            "UPDATE providers SET name=?, vendor=?, protocol=?, base_url=?, default_protocol=?, protocol_endpoints=?, preset_key=?, channel=?, models_endpoint=?, models_source=?, capabilities_source=?, static_models=?, api_key=?, use_proxy=?, is_active=?, updated_at=datetime('now') WHERE id=?",
+            "UPDATE providers SET name=?, vendor=?, protocol=?, base_url=?, default_protocol=?, protocol_endpoints=?, preset_key=?, channel=?, models_source=?, capabilities_source=?, static_models=?, api_key=?, use_proxy=?, is_active=?, updated_at=datetime('now') WHERE id=?",
         )
         .bind(name)
         .bind(vendor)
@@ -200,7 +200,6 @@ impl ProviderStore for SqliteProviderStore {
         .bind(protocol_endpoints)
         .bind(preset_key)
         .bind(channel)
-        .bind(&models_source)
         .bind(&models_source)
         .bind(capabilities_source)
         .bind(static_models)
@@ -266,11 +265,24 @@ struct SqliteRouteStore {
     pool: SqlitePool,
 }
 
+impl SqliteRouteStore {
+    async fn has_match_pattern_column(&self) -> anyhow::Result<bool> {
+        let rows = sqlx::query("PRAGMA table_info(routes)")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows.iter().any(|row| {
+            row.try_get::<String, _>("name")
+                .map(|name| name == "match_pattern")
+                .unwrap_or(false)
+        }))
+    }
+}
+
 #[async_trait]
 impl RouteStore for SqliteRouteStore {
     async fn list(&self) -> anyhow::Result<Vec<Route>> {
         Ok(sqlx::query_as::<_, Route>(
-            "SELECT id, name, COALESCE(ingress_protocol, 'openai') AS ingress_protocol, COALESCE(NULLIF(virtual_model, ''), match_pattern) AS virtual_model, COALESCE(strategy, 'weighted') AS strategy, target_provider, target_model, COALESCE(access_control, 0) AS access_control, is_active, created_at FROM routes ORDER BY created_at DESC",
+            "SELECT id, name, virtual_model, COALESCE(strategy, 'weighted') AS strategy, target_provider, target_model, COALESCE(access_control, 0) AS access_control, is_active, created_at FROM routes ORDER BY created_at DESC",
         )
         .fetch_all(&self.pool)
         .await?)
@@ -278,7 +290,7 @@ impl RouteStore for SqliteRouteStore {
 
     async fn get(&self, id: &str) -> anyhow::Result<Option<Route>> {
         Ok(sqlx::query_as::<_, Route>(
-            "SELECT id, name, COALESCE(ingress_protocol, 'openai') AS ingress_protocol, COALESCE(NULLIF(virtual_model, ''), match_pattern) AS virtual_model, COALESCE(strategy, 'weighted') AS strategy, target_provider, target_model, COALESCE(access_control, 0) AS access_control, is_active, created_at FROM routes WHERE id = ?",
+            "SELECT id, name, virtual_model, COALESCE(strategy, 'weighted') AS strategy, target_provider, target_model, COALESCE(access_control, 0) AS access_control, is_active, created_at FROM routes WHERE id = ?",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -287,33 +299,42 @@ impl RouteStore for SqliteRouteStore {
 
     async fn create(&self, input: CreateRoute) -> anyhow::Result<Route> {
         let id = uuid::Uuid::new_v4().to_string();
-        let ingress_protocol = input.ingress_protocol.trim().to_lowercase();
         let virtual_model = input.virtual_model.trim().to_string();
-        sqlx::query(
-            "INSERT INTO routes (id, name, ingress_protocol, virtual_model, match_pattern, strategy, target_provider, target_model, access_control) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&id)
-        .bind(input.name.trim())
-        .bind(ingress_protocol)
-        .bind(&virtual_model)
-        .bind(&virtual_model)
-        .bind(input.strategy.unwrap_or_else(|| "weighted".to_string()))
-        .bind(input.target_provider.trim())
-        .bind(input.target_model.trim())
-        .bind(input.access_control.unwrap_or(false))
-        .execute(&self.pool)
-        .await?;
+        let strategy = input.strategy.unwrap_or_else(|| "weighted".to_string());
+        if self.has_match_pattern_column().await? {
+            sqlx::query(
+                "INSERT INTO routes (id, name, virtual_model, match_pattern, strategy, target_provider, target_model, access_control) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(&id)
+            .bind(input.name.trim())
+            .bind(&virtual_model)
+            .bind(&virtual_model)
+            .bind(strategy)
+            .bind(input.target_provider.trim())
+            .bind(input.target_model.trim())
+            .bind(input.access_control.unwrap_or(false))
+            .execute(&self.pool)
+            .await?;
+        } else {
+            sqlx::query(
+                "INSERT INTO routes (id, name, virtual_model, strategy, target_provider, target_model, access_control) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(&id)
+            .bind(input.name.trim())
+            .bind(&virtual_model)
+            .bind(strategy)
+            .bind(input.target_provider.trim())
+            .bind(input.target_model.trim())
+            .bind(input.access_control.unwrap_or(false))
+            .execute(&self.pool)
+            .await?;
+        }
         self.get(&id).await?.context("route missing after create")
     }
 
     async fn update(&self, id: &str, input: UpdateRoute) -> anyhow::Result<Route> {
         let current = self.get(id).await?.context("route not found for update")?;
         let name = input.name.unwrap_or(current.name);
-        let ingress_protocol = input
-            .ingress_protocol
-            .unwrap_or(current.ingress_protocol)
-            .trim()
-            .to_lowercase();
         let virtual_model = input
             .virtual_model
             .unwrap_or(current.virtual_model)
@@ -325,21 +346,36 @@ impl RouteStore for SqliteRouteStore {
         let access_control = input.access_control.unwrap_or(current.access_control);
         let is_active = input.is_active.unwrap_or(current.is_active);
 
-        sqlx::query(
-            "UPDATE routes SET name=?, ingress_protocol=?, virtual_model=?, match_pattern=?, strategy=?, target_provider=?, target_model=?, access_control=?, is_active=? WHERE id=?",
-        )
-        .bind(name.trim())
-        .bind(ingress_protocol)
-        .bind(&virtual_model)
-        .bind(&virtual_model)
-        .bind(strategy.trim().to_lowercase())
-        .bind(target_provider.trim())
-        .bind(target_model.trim())
-        .bind(access_control)
-        .bind(is_active)
-        .bind(id)
-        .execute(&self.pool)
-        .await?;
+        if self.has_match_pattern_column().await? {
+            sqlx::query(
+                "UPDATE routes SET name=?, virtual_model=?, match_pattern=?, strategy=?, target_provider=?, target_model=?, access_control=?, is_active=? WHERE id=?",
+            )
+            .bind(name.trim())
+            .bind(&virtual_model)
+            .bind(&virtual_model)
+            .bind(strategy.trim().to_lowercase())
+            .bind(target_provider.trim())
+            .bind(target_model.trim())
+            .bind(access_control)
+            .bind(is_active)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        } else {
+            sqlx::query(
+                "UPDATE routes SET name=?, virtual_model=?, strategy=?, target_provider=?, target_model=?, access_control=?, is_active=? WHERE id=?",
+            )
+            .bind(name.trim())
+            .bind(&virtual_model)
+            .bind(strategy.trim().to_lowercase())
+            .bind(target_provider.trim())
+            .bind(target_model.trim())
+            .bind(access_control)
+            .bind(is_active)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        }
         self.get(id).await?.context("route missing after update")
     }
 
@@ -372,45 +408,20 @@ impl RouteStore for SqliteRouteStore {
         Ok(row.is_some())
     }
 
-    async fn exists_by_protocol_model(
-        &self,
-        ingress_protocol: &str,
-        virtual_model: &str,
-        exclude_id: Option<&str>,
-    ) -> anyhow::Result<bool> {
-        let sql = if exclude_id.is_some() {
-            "SELECT id FROM routes WHERE COALESCE(ingress_protocol, 'openai') = ? AND COALESCE(NULLIF(virtual_model, ''), match_pattern) = ? AND id != ? LIMIT 1"
-        } else {
-            "SELECT id FROM routes WHERE COALESCE(ingress_protocol, 'openai') = ? AND COALESCE(NULLIF(virtual_model, ''), match_pattern) = ? LIMIT 1"
-        };
-        let normalized_protocol = ingress_protocol.trim().to_lowercase();
-        let normalized_model = virtual_model.trim();
-        let row = if let Some(exclude_id) = exclude_id {
-            sqlx::query_scalar::<_, String>(sql)
-                .bind(&normalized_protocol)
-                .bind(normalized_model)
-                .bind(exclude_id)
-                .fetch_optional(&self.pool)
-                .await?
-        } else {
-            sqlx::query_scalar::<_, String>(sql)
-                .bind(&normalized_protocol)
-                .bind(normalized_model)
-                .fetch_optional(&self.pool)
-                .await?
-        };
-        Ok(row.is_some())
-    }
-
     async fn exists_by_virtual_model(
         &self,
         virtual_model: &str,
         exclude_id: Option<&str>,
     ) -> anyhow::Result<bool> {
-        let sql = if exclude_id.is_some() {
+        let has_match_pattern = self.has_match_pattern_column().await?;
+        let sql = if has_match_pattern && exclude_id.is_some() {
             "SELECT id FROM routes WHERE COALESCE(NULLIF(virtual_model, ''), match_pattern) = ? AND id != ? LIMIT 1"
-        } else {
+        } else if has_match_pattern {
             "SELECT id FROM routes WHERE COALESCE(NULLIF(virtual_model, ''), match_pattern) = ? LIMIT 1"
+        } else if exclude_id.is_some() {
+            "SELECT id FROM routes WHERE virtual_model = ? AND id != ? LIMIT 1"
+        } else {
+            "SELECT id FROM routes WHERE virtual_model = ? LIMIT 1"
         };
         let normalized_model = virtual_model.trim();
         let row = if let Some(exclude_id) = exclude_id {
@@ -428,9 +439,6 @@ impl RouteStore for SqliteRouteStore {
         Ok(row.is_some())
     }
 
-    async fn list_active(&self) -> anyhow::Result<Vec<Route>> {
-        self.load_active_snapshot().await
-    }
 }
 
 #[async_trait]
@@ -438,8 +446,8 @@ impl RouteSnapshotStore for SqliteRouteStore {
     async fn load_active_snapshot(&self) -> anyhow::Result<Vec<Route>> {
         Ok(sqlx::query_as::<_, Route>(
             r#"SELECT
-                id, name, COALESCE(ingress_protocol, 'openai') AS ingress_protocol,
-                COALESCE(NULLIF(virtual_model, ''), match_pattern) AS virtual_model,
+                id, name,
+                virtual_model,
                 COALESCE(strategy, 'weighted') AS strategy,
                 target_provider, target_model,
                 COALESCE(access_control, 0) AS access_control,
@@ -489,7 +497,7 @@ impl RouteTargetStore for SqliteRouteTargetStore {
             .bind(route_id)
             .bind(target.provider_id.trim())
             .bind(target.model.trim())
-            .bind(target.weight.unwrap_or(100).max(1))
+            .bind(target.weight.unwrap_or(100).max(0))
             .bind(target.priority.unwrap_or(1).max(1))
             .execute(&mut *tx)
             .await?;
@@ -821,8 +829,8 @@ impl LogStore for SqliteLogStore {
                 r#"INSERT INTO request_logs
                     (id, api_key_id, ingress_protocol, egress_protocol, request_model, actual_model,
                      provider_name, status_code, duration_ms, input_tokens, output_tokens,
-                     is_stream, is_tool_call, error_message, request_preview, response_preview)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+                     is_stream, is_tool_call, error_message, response_preview)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
             )
             .bind(&id)
             .bind(&entry.api_key_id)
@@ -838,7 +846,6 @@ impl LogStore for SqliteLogStore {
             .bind(entry.is_stream as i32)
             .bind(entry.is_tool_call as i32)
             .bind(&entry.error_message)
-            .bind(&entry.request_preview)
             .bind(&entry.response_preview)
             .execute(&self.pool)
             .await?;
@@ -849,7 +856,7 @@ impl LogStore for SqliteLogStore {
     async fn query(&self, query: LogQuery) -> anyhow::Result<LogPage> {
         let mut count_sql = String::from("SELECT COUNT(*) AS total FROM request_logs WHERE 1=1");
         let mut data_sql = String::from(
-            "SELECT id, created_at, api_key_id, ingress_protocol, egress_protocol, request_model, actual_model, provider_name, status_code, duration_ms, input_tokens, output_tokens, is_stream, is_tool_call, error_message, request_preview, response_preview FROM request_logs WHERE 1=1",
+            "SELECT id, created_at, api_key_id, ingress_protocol, egress_protocol, request_model, actual_model, provider_name, status_code, duration_ms, input_tokens, output_tokens, is_stream, is_tool_call, error_message, response_preview FROM request_logs WHERE 1=1",
         );
         let mut bind_values: Vec<String> = Vec::new();
         if let Some(provider) = query.provider.filter(|v| !v.is_empty()) {
@@ -983,12 +990,4 @@ impl StorageBootstrap for SqliteBootstrap {
         })
     }
 
-    fn capabilities(&self) -> StorageCapabilities {
-        StorageCapabilities {
-            transactions: true,
-            batch_writes: true,
-            aggregations: true,
-            managed_migrations: true,
-        }
-    }
 }

@@ -10,7 +10,7 @@ use crate::logging::LogEntry;
 use super::traits::{
     ApiKeyStore, AuthAccessStore, LogStore, ProviderStore, ProviderTestResult,
     RouteSnapshotStore, RouteStore, RouteTargetStore, SettingsStore, Storage, StorageBootstrap,
-    StorageBackend, StorageCapabilities, StorageHealth,
+    StorageBackend, StorageHealth,
 };
 
 use std::sync::Arc;
@@ -133,20 +133,6 @@ impl RouteStore for MemoryStorage {
         }))
     }
 
-    async fn exists_by_protocol_model(
-        &self,
-        ingress_protocol: &str,
-        virtual_model: &str,
-        exclude_id: Option<&str>,
-    ) -> anyhow::Result<bool> {
-        let routes = self.routes.read().await;
-        Ok(routes.iter().any(|r| {
-            r.ingress_protocol == ingress_protocol
-                && r.virtual_model == virtual_model
-                && exclude_id.map_or(true, |eid| r.id != eid)
-        }))
-    }
-
     async fn exists_by_virtual_model(
         &self,
         virtual_model: &str,
@@ -158,17 +144,13 @@ impl RouteStore for MemoryStorage {
                 && exclude_id.map_or(true, |eid| r.id != eid)
         }))
     }
-
-    async fn list_active(&self) -> anyhow::Result<Vec<Route>> {
-        let routes = self.routes.read().await;
-        Ok(routes.iter().filter(|r| r.is_active).cloned().collect())
-    }
 }
 
 #[async_trait]
 impl RouteSnapshotStore for MemoryStorage {
     async fn load_active_snapshot(&self) -> anyhow::Result<Vec<Route>> {
-        self.list_active().await
+        let routes = self.routes.read().await;
+        Ok(routes.iter().filter(|r| r.is_active).cloned().collect())
     }
 }
 
@@ -247,12 +229,4 @@ impl StorageBootstrap for MemoryStorage {
         })
     }
 
-    fn capabilities(&self) -> StorageCapabilities {
-        StorageCapabilities {
-            transactions: false,
-            batch_writes: false,
-            aggregations: false,
-            managed_migrations: false,
-        }
-    }
 }

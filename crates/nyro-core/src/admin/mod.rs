@@ -61,7 +61,6 @@ impl AdminService {
                 protocol_endpoints: input.protocol_endpoints,
                 preset_key: input.preset_key,
                 channel: input.channel,
-                models_endpoint: input.models_endpoint,
                 models_source: input.models_source,
                 capabilities_source: input.capabilities_source,
                 static_models: input.static_models,
@@ -94,7 +93,6 @@ impl AdminService {
                 current
                     .models_source
                     .as_deref()
-                    .or(current.models_endpoint.as_deref())
                     .map(ToString::to_string)
             });
         let protocol = input.protocol.unwrap_or(current.protocol);
@@ -125,7 +123,6 @@ impl AdminService {
                     protocol_endpoints: input.protocol_endpoints,
                     preset_key,
                     channel,
-                    models_endpoint: models_source.clone(),
                     models_source,
                     capabilities_source,
                     static_models,
@@ -486,7 +483,6 @@ impl AdminService {
             .routes()
             .create(CreateRoute {
                 name,
-                ingress_protocol: input.ingress_protocol,
                 virtual_model: input.virtual_model,
                 strategy: Some(strategy),
                 target_provider: primary_target.provider_id.clone(),
@@ -510,10 +506,6 @@ impl AdminService {
             "route name",
         )?;
         self.ensure_route_name_unique(Some(id), &name).await?;
-        let ingress_protocol = input
-            .ingress_protocol
-            .clone()
-            .unwrap_or_else(|| current.ingress_protocol.clone());
         let virtual_model = input
             .virtual_model
             .clone()
@@ -537,7 +529,6 @@ impl AdminService {
                 id,
                 UpdateRoute {
                     name: Some(name),
-                    ingress_protocol: Some(ingress_protocol),
                     virtual_model: Some(virtual_model),
                     strategy: Some(strategy),
                     target_provider: Some(primary_target.provider_id.clone()),
@@ -715,7 +706,6 @@ impl AdminService {
                     protocol_endpoints: p.protocol_endpoints,
                     preset_key: p.preset_key,
                     channel: p.channel,
-                    models_endpoint: p.models_endpoint,
                     models_source: p.models_source,
                     capabilities_source: p.capabilities_source,
                     static_models: p.static_models,
@@ -728,9 +718,7 @@ impl AdminService {
                 .into_iter()
                 .map(|r| ExportRoute {
                     name: r.name,
-                    ingress_protocol: r.ingress_protocol,
                     virtual_model: r.virtual_model,
-                    target_provider_name: String::new(),
                     target_model: r.target_model,
                     access_control: r.access_control,
                     is_active: r.is_active,
@@ -773,7 +761,6 @@ impl AdminService {
                         },
                         preset_key: p.preset_key.clone(),
                         channel: p.channel.clone(),
-                        models_endpoint: p.models_endpoint.clone(),
                         models_source: p.models_source.clone(),
                         capabilities_source: p.capabilities_source.clone(),
                         static_models: p.static_models.clone(),
@@ -809,7 +796,6 @@ impl AdminService {
                     if self
                         .create_route(CreateRoute {
                             name: r.name.clone(),
-                            ingress_protocol: r.ingress_protocol.clone(),
                             virtual_model: r.virtual_model.clone(),
                             strategy: Some("weighted".to_string()),
                             target_provider: pid,
@@ -1043,8 +1029,8 @@ fn ensure_route_targets_valid(targets: &[CreateRouteTarget]) -> anyhow::Result<(
             anyhow::bail!("target model cannot be empty");
         }
         let weight = target.weight.unwrap_or(100);
-        if weight < 1 {
-            anyhow::bail!("target weight must be >= 1");
+        if weight < 0 {
+            anyhow::bail!("target weight must be >= 0");
         }
         let priority = target.priority.unwrap_or(1);
         if priority < 1 || priority > 2 {

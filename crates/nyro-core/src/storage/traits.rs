@@ -47,14 +47,6 @@ pub struct StorageHealth {
     pub writable: bool,
 }
 
-#[derive(Debug, Clone)]
-pub struct StorageCapabilities {
-    pub transactions: bool,
-    pub batch_writes: bool,
-    pub aggregations: bool,
-    pub managed_migrations: bool,
-}
-
 #[async_trait]
 pub trait ProviderStore: Send + Sync {
     async fn list(&self) -> anyhow::Result<Vec<Provider>>;
@@ -74,18 +66,11 @@ pub trait RouteStore: Send + Sync {
     async fn update(&self, id: &str, input: UpdateRoute) -> anyhow::Result<Route>;
     async fn delete(&self, id: &str) -> anyhow::Result<()>;
     async fn exists_by_name(&self, name: &str, exclude_id: Option<&str>) -> anyhow::Result<bool>;
-    async fn exists_by_protocol_model(
-        &self,
-        ingress_protocol: &str,
-        virtual_model: &str,
-        exclude_id: Option<&str>,
-    ) -> anyhow::Result<bool>;
     async fn exists_by_virtual_model(
         &self,
         virtual_model: &str,
         exclude_id: Option<&str>,
     ) -> anyhow::Result<bool>;
-    async fn list_active(&self) -> anyhow::Result<Vec<Route>>;
 }
 
 #[async_trait]
@@ -145,7 +130,6 @@ pub trait StorageBootstrap: Send + Sync {
     async fn init(&self) -> anyhow::Result<()>;
     async fn migrate(&self) -> anyhow::Result<()>;
     async fn health(&self) -> anyhow::Result<StorageHealth>;
-    fn capabilities(&self) -> StorageCapabilities;
 }
 
 pub trait Storage: Send + Sync {

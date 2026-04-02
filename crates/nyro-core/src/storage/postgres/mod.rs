@@ -15,7 +15,7 @@ use crate::storage::sql::pool::RelationalPool;
 use crate::storage::traits::{
     ApiKeyAccessRecord, ApiKeyStore, AuthAccessStore, DynStorage, LogStore, ProviderStore,
     ProviderTestResult, RouteSnapshotStore, RouteStore, RouteTargetStore, SettingsStore, Storage,
-    StorageBackend, StorageBootstrap, StorageCapabilities, StorageHealth, UsageWindow,
+    StorageBackend, StorageBootstrap, StorageHealth, UsageWindow,
 };
 
 #[derive(Clone)]
@@ -182,7 +182,7 @@ impl ProviderStore for PostgresProviderStore {
             .unwrap_or(input.protocol.as_str());
         let protocol_endpoints = input.protocol_endpoints.as_deref().unwrap_or("{}");
         sqlx::query(
-            "INSERT INTO providers (id, name, vendor, protocol, base_url, default_protocol, protocol_endpoints, preset_key, channel, models_endpoint, models_source, capabilities_source, static_models, api_key, use_proxy) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
+            "INSERT INTO providers (id, name, vendor, protocol, base_url, default_protocol, protocol_endpoints, preset_key, channel, models_source, capabilities_source, static_models, api_key, use_proxy) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
         )
         .bind(&id)
         .bind(input.name.trim())
@@ -193,7 +193,6 @@ impl ProviderStore for PostgresProviderStore {
         .bind(protocol_endpoints)
         .bind(input.preset_key)
         .bind(input.channel)
-        .bind(models_source.clone())
         .bind(models_source)
         .bind(input.capabilities_source)
         .bind(input.static_models)
@@ -214,7 +213,7 @@ impl ProviderStore for PostgresProviderStore {
             normalize_provider_vendor(current.vendor.as_deref())
         };
         let models_source = models_source_input
-            .or_else(|| current.models_source.clone().or(current.models_endpoint.clone()));
+            .or_else(|| current.models_source.clone());
         let protocol = input.protocol.unwrap_or(current.protocol.clone());
         let base_url = input.base_url.unwrap_or(current.base_url);
         let default_protocol = input
@@ -232,7 +231,7 @@ impl ProviderStore for PostgresProviderStore {
         let is_active = input.is_active.unwrap_or(current.is_active);
 
         sqlx::query(
-            "UPDATE providers SET name=$1, vendor=$2, protocol=$3, base_url=$4, default_protocol=$5, protocol_endpoints=$6, preset_key=$7, channel=$8, models_endpoint=$9, models_source=$10, capabilities_source=$11, static_models=$12, api_key=$13, use_proxy=$14, is_active=$15, updated_at=CURRENT_TIMESTAMP WHERE id=$16",
+            "UPDATE providers SET name=$1, vendor=$2, protocol=$3, base_url=$4, default_protocol=$5, protocol_endpoints=$6, preset_key=$7, channel=$8, models_source=$9, capabilities_source=$10, static_models=$11, api_key=$12, use_proxy=$13, is_active=$14, updated_at=CURRENT_TIMESTAMP WHERE id=$15",
         )
         .bind(name.trim())
         .bind(vendor)
@@ -242,7 +241,6 @@ impl ProviderStore for PostgresProviderStore {
         .bind(protocol_endpoints)
         .bind(preset_key)
         .bind(channel)
-        .bind(models_source.clone())
         .bind(models_source)
         .bind(capabilities_source)
         .bind(static_models)
@@ -319,15 +317,12 @@ impl RouteStore for PostgresRouteStore {
 
     async fn create(&self, input: CreateRoute) -> anyhow::Result<Route> {
         let id = uuid::Uuid::new_v4().to_string();
-        let ingress_protocol = input.ingress_protocol.trim().to_lowercase();
         let virtual_model = input.virtual_model.trim().to_string();
         sqlx::query(
-            "INSERT INTO routes (id, name, ingress_protocol, virtual_model, match_pattern, strategy, target_provider, target_model, access_control) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+            "INSERT INTO routes (id, name, virtual_model, strategy, target_provider, target_model, access_control) VALUES ($1, $2, $3, $4, $5, $6, $7)",
         )
         .bind(&id)
         .bind(input.name.trim())
-        .bind(ingress_protocol)
-        .bind(&virtual_model)
         .bind(&virtual_model)
         .bind(input.strategy.unwrap_or_else(|| "weighted".to_string()))
         .bind(input.target_provider.trim())
@@ -341,11 +336,6 @@ impl RouteStore for PostgresRouteStore {
     async fn update(&self, id: &str, input: UpdateRoute) -> anyhow::Result<Route> {
         let current = self.get(id).await?.context("route not found for update")?;
         let name = input.name.unwrap_or(current.name);
-        let ingress_protocol = input
-            .ingress_protocol
-            .unwrap_or(current.ingress_protocol)
-            .trim()
-            .to_lowercase();
         let virtual_model = input
             .virtual_model
             .unwrap_or(current.virtual_model)
@@ -358,11 +348,9 @@ impl RouteStore for PostgresRouteStore {
         let is_active = input.is_active.unwrap_or(current.is_active);
 
         sqlx::query(
-            "UPDATE routes SET name=$1, ingress_protocol=$2, virtual_model=$3, match_pattern=$4, strategy=$5, target_provider=$6, target_model=$7, access_control=$8, is_active=$9 WHERE id=$10",
+            "UPDATE routes SET name=$1, virtual_model=$2, strategy=$3, target_provider=$4, target_model=$5, access_control=$6, is_active=$7 WHERE id=$8",
         )
         .bind(name.trim())
-        .bind(ingress_protocol)
-        .bind(&virtual_model)
         .bind(&virtual_model)
         .bind(strategy.trim().to_lowercase())
         .bind(target_provider.trim())
@@ -403,35 +391,6 @@ impl RouteStore for PostgresRouteStore {
         Ok(row.is_some())
     }
 
-    async fn exists_by_protocol_model(
-        &self,
-        ingress_protocol: &str,
-        virtual_model: &str,
-        exclude_id: Option<&str>,
-    ) -> anyhow::Result<bool> {
-        let normalized_protocol = ingress_protocol.trim().to_lowercase();
-        let normalized_model = virtual_model.trim();
-        let row = if let Some(exclude_id) = exclude_id {
-            sqlx::query_scalar::<_, String>(
-                "SELECT id FROM routes WHERE COALESCE(ingress_protocol, 'openai') = $1 AND COALESCE(NULLIF(virtual_model, ''), match_pattern) = $2 AND id != $3 LIMIT 1",
-            )
-            .bind(&normalized_protocol)
-            .bind(normalized_model)
-            .bind(exclude_id)
-            .fetch_optional(&self.pool)
-            .await?
-        } else {
-            sqlx::query_scalar::<_, String>(
-                "SELECT id FROM routes WHERE COALESCE(ingress_protocol, 'openai') = $1 AND COALESCE(NULLIF(virtual_model, ''), match_pattern) = $2 LIMIT 1",
-            )
-            .bind(&normalized_protocol)
-            .bind(normalized_model)
-            .fetch_optional(&self.pool)
-            .await?
-        };
-        Ok(row.is_some())
-    }
-
     async fn exists_by_virtual_model(
         &self,
         virtual_model: &str,
@@ -440,7 +399,7 @@ impl RouteStore for PostgresRouteStore {
         let normalized_model = virtual_model.trim();
         let row = if let Some(exclude_id) = exclude_id {
             sqlx::query_scalar::<_, String>(
-                "SELECT id FROM routes WHERE COALESCE(NULLIF(virtual_model, ''), match_pattern) = $1 AND id != $2 LIMIT 1",
+                "SELECT id FROM routes WHERE virtual_model = $1 AND id != $2 LIMIT 1",
             )
             .bind(normalized_model)
             .bind(exclude_id)
@@ -448,7 +407,7 @@ impl RouteStore for PostgresRouteStore {
             .await?
         } else {
             sqlx::query_scalar::<_, String>(
-                "SELECT id FROM routes WHERE COALESCE(NULLIF(virtual_model, ''), match_pattern) = $1 LIMIT 1",
+                "SELECT id FROM routes WHERE virtual_model = $1 LIMIT 1",
             )
             .bind(normalized_model)
             .fetch_optional(&self.pool)
@@ -457,9 +416,6 @@ impl RouteStore for PostgresRouteStore {
         Ok(row.is_some())
     }
 
-    async fn list_active(&self) -> anyhow::Result<Vec<Route>> {
-        self.load_active_snapshot().await
-    }
 }
 
 #[async_trait]
@@ -508,7 +464,7 @@ impl RouteTargetStore for PostgresRouteTargetStore {
             .bind(route_id)
             .bind(target.provider_id.trim())
             .bind(target.model.trim())
-            .bind(target.weight.unwrap_or(100).max(1))
+            .bind(target.weight.unwrap_or(100).max(0))
             .bind(target.priority.unwrap_or(1).max(1))
             .execute(&mut *tx)
             .await?;
@@ -759,8 +715,8 @@ impl LogStore for PostgresLogStore {
                 r#"INSERT INTO request_logs
                     (id, api_key_id, ingress_protocol, egress_protocol, request_model, actual_model,
                      provider_name, status_code, duration_ms, input_tokens, output_tokens,
-                     is_stream, is_tool_call, error_message, request_preview, response_preview)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)"#,
+                     is_stream, is_tool_call, error_message, response_preview)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)"#,
             )
             .bind(&id)
             .bind(&entry.api_key_id)
@@ -776,7 +732,6 @@ impl LogStore for PostgresLogStore {
             .bind(entry.is_stream)
             .bind(entry.is_tool_call)
             .bind(&entry.error_message)
-            .bind(&entry.request_preview)
             .bind(&entry.response_preview)
             .execute(&self.pool)
             .await?;
@@ -787,7 +742,7 @@ impl LogStore for PostgresLogStore {
     async fn query(&self, query: LogQuery) -> anyhow::Result<LogPage> {
         let mut count_sql = String::from("SELECT COUNT(*) AS total FROM request_logs WHERE 1=1");
         let mut data_sql = String::from(
-            "SELECT id, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS created_at, api_key_id, ingress_protocol, egress_protocol, request_model, actual_model, provider_name, status_code, duration_ms, input_tokens, output_tokens, is_stream, is_tool_call, error_message, request_preview, response_preview FROM request_logs WHERE 1=1",
+            "SELECT id, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS created_at, api_key_id, ingress_protocol, egress_protocol, request_model, actual_model, provider_name, status_code, duration_ms, input_tokens, output_tokens, is_stream, is_tool_call, error_message, response_preview FROM request_logs WHERE 1=1",
         );
         let mut idx = 1;
         let mut bind_values: Vec<String> = Vec::new();
@@ -935,25 +890,6 @@ impl StorageBootstrap for PostgresBootstrap {
         )
         .execute(self.adapter.pool())
         .await?;
-        sqlx::query(
-            r#"
-            INSERT INTO route_targets (id, route_id, provider_id, model, weight, priority)
-            SELECT md5(random()::text || clock_timestamp()::text), r.id, r.fallback_provider, COALESCE(NULLIF(r.fallback_model, ''), r.target_model), 100, 2
-            FROM routes r
-            WHERE r.fallback_provider IS NOT NULL
-              AND btrim(r.fallback_provider) != ''
-              AND NOT EXISTS (
-                SELECT 1 FROM route_targets rt WHERE rt.route_id = r.id AND rt.priority = 2
-              )
-            "#,
-        )
-        .execute(self.adapter.pool())
-        .await?;
-        sqlx::query(
-            "UPDATE routes SET strategy = 'priority' WHERE fallback_provider IS NOT NULL AND btrim(fallback_provider) != '' AND (strategy IS NULL OR strategy = '' OR strategy = 'weighted')",
-        )
-        .execute(self.adapter.pool())
-        .await?;
         Ok(())
     }
 
@@ -967,19 +903,11 @@ impl StorageBootstrap for PostgresBootstrap {
         })
     }
 
-    fn capabilities(&self) -> StorageCapabilities {
-        StorageCapabilities {
-            transactions: true,
-            batch_writes: true,
-            aggregations: true,
-            managed_migrations: true,
-        }
-    }
 }
 
 fn provider_select(suffix: Option<&str>) -> String {
     let mut sql = String::from(
-        "SELECT id, name, vendor, protocol, base_url, COALESCE(default_protocol, protocol) AS default_protocol, COALESCE(protocol_endpoints, '{}') AS protocol_endpoints, preset_key, COALESCE(channel, region) AS channel, models_endpoint, COALESCE(models_source, models_endpoint) AS models_source, capabilities_source, static_models, api_key, COALESCE(use_proxy, FALSE) AS use_proxy, last_test_success, to_char(last_test_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS last_test_at, is_active, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS created_at, to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS updated_at FROM providers",
+        "SELECT id, name, vendor, protocol, base_url, COALESCE(default_protocol, protocol) AS default_protocol, COALESCE(protocol_endpoints, '{}') AS protocol_endpoints, preset_key, channel, models_source, capabilities_source, static_models, api_key, COALESCE(use_proxy, FALSE) AS use_proxy, last_test_success, to_char(last_test_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS last_test_at, is_active, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS created_at, to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS updated_at FROM providers",
     );
     if let Some(suffix) = suffix {
         sql.push(' ');
@@ -992,7 +920,7 @@ fn provider_select(suffix: Option<&str>) -> String {
 
 fn route_select(suffix: Option<&str>) -> String {
     let mut sql = String::from(
-        "SELECT id, name, COALESCE(ingress_protocol, 'openai') AS ingress_protocol, COALESCE(NULLIF(virtual_model, ''), match_pattern) AS virtual_model, COALESCE(strategy, 'weighted') AS strategy, target_provider, target_model, COALESCE(access_control, false) AS access_control, is_active, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS created_at FROM routes",
+        "SELECT id, name, virtual_model, COALESCE(strategy, 'weighted') AS strategy, target_provider, target_model, COALESCE(access_control, false) AS access_control, is_active, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS created_at FROM routes",
     );
     if let Some(suffix) = suffix {
         sql.push(' ');
@@ -1087,9 +1015,7 @@ CREATE TABLE IF NOT EXISTS providers (
     protocol TEXT NOT NULL,
     base_url TEXT NOT NULL,
     preset_key TEXT,
-    region TEXT,
     channel TEXT,
-    models_endpoint TEXT,
     models_source TEXT,
     capabilities_source TEXT,
     static_models TEXT,
@@ -1106,14 +1032,10 @@ CREATE TABLE IF NOT EXISTS providers (
 CREATE TABLE IF NOT EXISTS routes (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    match_pattern TEXT NOT NULL,
-    ingress_protocol TEXT,
     virtual_model TEXT,
     strategy TEXT DEFAULT 'weighted',
     target_provider TEXT NOT NULL REFERENCES providers(id),
     target_model TEXT NOT NULL,
-    fallback_provider TEXT REFERENCES providers(id),
-    fallback_model TEXT,
     access_control BOOLEAN DEFAULT FALSE,
     is_active BOOLEAN DEFAULT TRUE,
     priority INTEGER DEFAULT 0,
@@ -1148,7 +1070,6 @@ CREATE TABLE IF NOT EXISTS request_logs (
     is_stream BOOLEAN DEFAULT FALSE,
     is_tool_call BOOLEAN DEFAULT FALSE,
     error_message TEXT,
-    request_preview TEXT,
     response_preview TEXT
 );
 
