@@ -19,6 +19,7 @@ type CodeLanguage = "python" | "typescript" | "curl";
 type CliToolId = "claude-code" | "codex-cli" | "gemini-cli" | "opencode";
 type GatewayProtocol = "openai" | "anthropic" | "gemini";
 type CodeProtocol = GatewayProtocol;
+type RouteKind = "chat" | "embedding";
 
 type CliTool = {
   id: CliToolId;
@@ -98,6 +99,20 @@ function protocolApiPath(protocol: CodeProtocol) {
   return "/v1beta/models/{model}:generateContent";
 }
 
+function protocolApiPathForRoute(protocol: CodeProtocol, routeType: RouteKind) {
+  if (routeType === "embedding") return "/v1/embeddings";
+  return protocolApiPath(protocol);
+}
+
+function normalizeRouteType(routeType?: string): RouteKind {
+  return routeType === "embedding" ? "embedding" : "chat";
+}
+
+function routeTypeLabel(routeType: RouteKind, isZh: boolean) {
+  if (routeType === "embedding") return isZh ? "向量路由" : "Embedding";
+  return isZh ? "对话路由" : "Chat";
+}
+
 function jsonText(input: unknown) {
   return JSON.stringify(input, null, 2);
 }
@@ -113,8 +128,51 @@ function codeTemplate(params: {
   apiKey: string;
   host: string;
   language: CodeLanguage;
+  routeType: RouteKind;
 }) {
-  const { protocol, model, apiKey, host, language } = params;
+  const { protocol, model, apiKey, host, language, routeType } = params;
+
+  if (routeType === "embedding") {
+    if (language === "curl") {
+      return `curl ${host}/v1/embeddings \\
+  -H "Authorization: Bearer ${apiKey}" \\
+  -H "Content-Type: application/json" \\
+  -d '${jsonText({
+    model,
+    input: "hello world",
+  })}'`;
+    }
+    if (language === "python") {
+      return `# pip install openai
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="${apiKey}",
+    base_url="${host}/v1"
+)
+
+response = client.embeddings.create(
+    model="${model}",
+    input="hello world"
+)
+
+print(response.data[0].embedding[:8])`;
+    }
+    return `// npm install openai
+import OpenAI from "openai";
+
+const client = new OpenAI({
+  apiKey: "${apiKey}",
+  baseURL: "${host}/v1",
+});
+
+const response = await client.embeddings.create({
+  model: "${model}",
+  input: "hello world",
+});
+
+return response.data[0].embedding;`;
+  }
 
   if (language === "curl") {
     if (protocol === "openai") {
@@ -446,15 +504,20 @@ export default function ConnectPage() {
     [],
   );
 
+  const codeRoutes = useMemo(() => {
+    if (selectedCodeProtocol === "openai") return routes;
+    return routes.filter((route) => normalizeRouteType(route.route_type) === "chat");
+  }, [routes, selectedCodeProtocol]);
+
   useEffect(() => {
-    if (selectedCodeRouteId && !routes.some((route) => route.id === selectedCodeRouteId)) {
+    if (selectedCodeRouteId && !codeRoutes.some((route) => route.id === selectedCodeRouteId)) {
       setSelectedCodeRouteId("");
     }
-  }, [routes, selectedCodeRouteId]);
+  }, [codeRoutes, selectedCodeRouteId]);
 
   const selectedRoute = useMemo(
-    () => routes.find((route) => route.id === selectedCodeRouteId) ?? null,
-    [routes, selectedCodeRouteId],
+    () => codeRoutes.find((route) => route.id === selectedCodeRouteId) ?? null,
+    [codeRoutes, selectedCodeRouteId],
   );
 
   const codeAvailableKeys = useMemo(() => {
@@ -483,11 +546,15 @@ export default function ConnectPage() {
   const hasProxyPort = typeof proxyPort === "number" && Number.isFinite(proxyPort) && proxyPort > 0;
   const host = hasProxyPort ? `http://localhost:${proxyPort}` : "http://localhost:<proxy-port>";
   const codeModel = selectedRoute?.virtual_model ?? "gpt-4o";
+  const codeRouteType: RouteKind = normalizeRouteType(selectedRoute?.route_type);
   const codeProtocol = selectedCodeProtocol;
   const selectedCliTool =
     CLI_TOOLS.find((tool) => tool.id === selectedCliToolId) ?? CLI_TOOLS.find((tool) => tool.id === "claude-code")!;
   const selectedCliReady = IS_TAURI ? Boolean(cliReadyStatus[selectedCliTool.id]) : true;
-  const cliRoutes = routes;
+  const cliRoutes = useMemo(
+    () => routes.filter((route) => normalizeRouteType(route.route_type) === "chat"),
+    [routes],
+  );
   const selectedCliRoute = useMemo(
     () => cliRoutes.find((route) => route.id === selectedCliRouteId) ?? null,
     [cliRoutes, selectedCliRouteId],
@@ -570,6 +637,7 @@ export default function ConnectPage() {
     apiKey: codeEffectiveApiKey,
     host,
     language: codeLang,
+    routeType: codeRouteType,
   });
   const cliPreview = cliPreviewTemplate({
     tool: selectedCliTool,
@@ -786,12 +854,12 @@ export default function ConnectPage() {
                       }}
                     options={cliRoutes.map((route) => ({
                       value: route.id,
-                      label: `${route.name} · ${route.virtual_model}`,
+                      label: `${route.name} · ${route.virtual_model} · ${routeTypeLabel(normalizeRouteType(route.route_type), isZh)}`,
                     }))}
                     placeholder={
                       cliRoutes.length > 0
                         ? (isZh ? "选择路由" : "Select route")
-                        : (isZh ? "请先创建路由" : "Create route first")
+                        : (isZh ? "请先创建对话路由" : "Create a chat route first")
                     }
                     searchPlaceholder={isZh ? "搜索路由..." : "Search routes..."}
                     emptyText={isZh ? "暂无可选路由" : "No routes available"}
@@ -801,8 +869,13 @@ export default function ConnectPage() {
                         {selectedCliCapabilities.reasoning && <Badge variant="success" className="connect-label-badge">{isZh ? "推理" : "Reasoning"}</Badge>}
                         {selectedCliCapabilities.tool_call && <Badge variant="success" className="connect-label-badge">{isZh ? "工具调用" : "Tools"}</Badge>}
                         <Badge variant="success" className="connect-label-badge">
-                          {Math.round(selectedCliCapabilities.context_window / 1024)}K
+                          {`ctx:${Math.round(selectedCliCapabilities.context_window / 1024)}K`}
                         </Badge>
+                        {selectedCliCapabilities.embedding_length != null && selectedCliCapabilities.embedding_length > 0 && (
+                          <Badge variant="success" className="connect-label-badge">
+                            {`emb:${selectedCliCapabilities.embedding_length}`}
+                          </Badge>
+                        )}
                       </div>
                     )}
                   </div>
@@ -927,8 +1000,8 @@ export default function ConnectPage() {
                 {cliRoutes.length === 0 && (
                   <p className="text-xs text-amber-600">
                     {isZh
-                      ? "当前没有可选路由，请先创建路由。"
-                      : "No routes available. Create a route first."}
+                      ? "当前没有可选对话路由，请先创建对话路由。"
+                      : "No chat routes available. Create a chat route first."}
                   </p>
                 )}
                 {selectedCliRoute?.access_control && !selectedCliApiKey && (
@@ -997,7 +1070,9 @@ export default function ConnectPage() {
               <div className="flex items-center gap-2">
                 <Code2 className="h-4 w-4 text-slate-600" />
                 <p className="text-sm font-semibold text-slate-900">{protocolLabel(selectedCodeProtocol, isZh)}</p>
-                <Badge variant="outline" className="connect-label-badge">{protocolApiPath(selectedCodeProtocol)}</Badge>
+                <Badge variant="outline" className="connect-label-badge">
+                  {protocolApiPathForRoute(selectedCodeProtocol, codeRouteType)}
+                </Badge>
               </div>
 
               <div className="grid grid-cols-2 gap-4 items-start">
@@ -1009,11 +1084,17 @@ export default function ConnectPage() {
                     className="bg-white"
                     value={selectedCodeRouteId}
                     onValueChange={setSelectedCodeRouteId}
-                    options={routes.map((route) => ({
+                    options={codeRoutes.map((route) => ({
                       value: route.id,
-                      label: `${route.name} · ${route.virtual_model}`,
+                      label: `${route.name} · ${route.virtual_model} · ${routeTypeLabel(normalizeRouteType(route.route_type), isZh)}`,
                     }))}
-                    placeholder={routes.length > 0 ? (isZh ? "选择路由" : "Select route") : (isZh ? "请先创建路由" : "Create route first")}
+                    placeholder={
+                      codeRoutes.length > 0
+                        ? (isZh ? "选择路由" : "Select route")
+                        : selectedCodeProtocol === "openai"
+                          ? (isZh ? "请先创建路由" : "Create route first")
+                          : (isZh ? "请先创建对话路由" : "Create a chat route first")
+                    }
                     searchPlaceholder={isZh ? "搜索路由..." : "Search routes..."}
                     emptyText={isZh ? "暂无可选路由" : "No routes available"}
                   />

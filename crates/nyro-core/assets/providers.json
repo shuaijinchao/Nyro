@@ -161,6 +161,34 @@
         "id": "default",
         "label": { "zh": "默认", "en": "Default" },
         "baseUrls": {
+          "openai": "https://open.bigmodel.cn/api/paas/v4",
+          "anthropic": "https://open.bigmodel.cn/api/anthropic"
+        },
+        "modelsSource": "https://open.bigmodel.cn/api/paas/v4/models",
+        "capabilitiesSource": "ai://models.dev/zhipuai"
+      },
+      {
+        "id": "coding",
+        "label": { "zh": "Coding Plan", "en": "Coding Plan" },
+        "baseUrls": {
+          "openai": "https://open.bigmodel.cn/api/coding/paas/v4",
+          "anthropic": "https://open.bigmodel.cn/api/anthropic"
+        },
+        "modelsSource": "https://open.bigmodel.cn/api/coding/paas/v4/models",
+        "capabilitiesSource": "ai://models.dev/zhipuai"
+      }
+    ]
+  },
+  {
+    "id": "zai",
+    "label": { "zh": "Z.ai", "en": "Z.ai" },
+    "icon": "zai",
+    "defaultProtocol": "openai",
+    "channels": [
+      {
+        "id": "default",
+        "label": { "zh": "默认", "en": "Default" },
+        "baseUrls": {
           "openai": "https://api.z.ai/api/paas/v4",
           "anthropic": "https://api.z.ai/api/anthropic"
         },
@@ -168,13 +196,13 @@
         "capabilitiesSource": "ai://models.dev/zhipuai"
       },
       {
-        "id": "china",
-        "label": { "zh": "中国站", "en": "China" },
+        "id": "coding",
+        "label": { "zh": "Coding Plan", "en": "Coding Plan" },
         "baseUrls": {
-          "openai": "https://open.bigmodel.cn/api/paas/v4",
-          "anthropic": "https://open.bigmodel.cn/api/anthropic"
+          "openai": "https://api.z.ai/api/coding/paas/v4",
+          "anthropic": "https://api.z.ai/api/anthropic"
         },
-        "modelsSource": "https://open.bigmodel.cn/api/paas/v4/models",
+        "modelsSource": "https://api.z.ai/api/coding/paas/v4/models",
         "capabilitiesSource": "ai://models.dev/zhipuai"
       }
     ]

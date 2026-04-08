@@ -124,7 +124,7 @@ export function ProviderIcon({
     loader()
       .then((rawSvg) => {
         if (cancelled) return;
-        const markup = normalizeProviderSvg(rawSvg, monochrome);
+        const markup = normalizeProviderSvg(rawSvg, monochrome, resolvedIconKey);
         iconMarkupCache.set(cacheKey, markup);
         setIconMarkup(markup);
       })
@@ -159,7 +159,7 @@ export function ProviderIcon({
   );
 }
 
-function normalizeProviderSvg(svg: string, monochrome: boolean) {
+function normalizeProviderSvg(svg: string, monochrome: boolean, iconKey?: string | null) {
   let next = svg
     .replace(/<title>.*?<\/title>/gis, "")
     .replace(
@@ -168,6 +168,32 @@ function normalizeProviderSvg(svg: string, monochrome: boolean) {
     );
 
   if (!monochrome) return next;
+
+  if (iconKey === "zai") {
+    return next
+      .replace(/<defs>[\s\S]*?<\/defs>/gi, "")
+      .replace(/\sstyle="[^"]*"/gi, "")
+      .replace(
+        /(<path[^>]*id="zai-bg"[^>]*?)\sfill="[^"]*"/i,
+        '$1 fill="none"',
+      )
+      .replace(
+        /(<path[^>]*id="zai-bg"[^>]*?)\sstroke="[^"]*"/i,
+        '$1 stroke="currentColor"',
+      )
+      .replace(
+        /(<path[^>]*id="zai-bg"[^>]*?)\sstroke-width="[^"]*"/i,
+        '$1 stroke-width="2.1"',
+      )
+      .replace(
+        /(<g[^>]*id="zai-glyph"[^>]*?)\sfill="[^"]*"/i,
+        '$1 fill="currentColor"',
+      )
+      .replace(
+        /<svg\b([^>]*)>/i,
+        '<svg$1 fill="currentColor" stroke="currentColor" color="currentColor">',
+      );
+  }
 
   next = next
     .replace(/<defs>[\s\S]*?<\/defs>/gi, "")

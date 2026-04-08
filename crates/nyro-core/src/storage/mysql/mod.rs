@@ -328,8 +328,13 @@ impl RouteStore for MySqlRouteStore {
     async fn create(&self, input: CreateRoute) -> anyhow::Result<Route> {
         let id = uuid::Uuid::new_v4().to_string();
         let virtual_model = input.virtual_model.trim().to_string();
+        let route_type = input
+            .route_type
+            .unwrap_or_else(|| "chat".to_string())
+            .trim()
+            .to_string();
         sqlx::query(
-            "INSERT INTO routes (id, name, virtual_model, strategy, target_provider, target_model, access_control, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP())",
+            "INSERT INTO routes (id, name, virtual_model, strategy, target_provider, target_model, access_control, route_type, cache_exact_ttl, cache_semantic_ttl, cache_semantic_threshold, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP())",
         )
         .bind(&id)
         .bind(input.name.trim())
@@ -338,6 +343,10 @@ impl RouteStore for MySqlRouteStore {
         .bind(input.target_provider.trim())
         .bind(input.target_model.trim())
         .bind(input.access_control.unwrap_or(false))
+        .bind(route_type)
+        .bind(input.cache_exact_ttl)
+        .bind(input.cache_semantic_ttl)
+        .bind(input.cache_semantic_threshold)
         .execute(&self.pool)
         .await?;
         self.get(&id).await?.context("route missing after create")
@@ -355,10 +364,18 @@ impl RouteStore for MySqlRouteStore {
         let target_provider = input.target_provider.unwrap_or(current.target_provider);
         let target_model = input.target_model.unwrap_or(current.target_model);
         let access_control = input.access_control.unwrap_or(current.access_control);
+        let route_type = input
+            .route_type
+            .unwrap_or(current.route_type)
+            .trim()
+            .to_string();
+        let cache_exact_ttl = input.cache_exact_ttl;
+        let cache_semantic_ttl = input.cache_semantic_ttl;
+        let cache_semantic_threshold = input.cache_semantic_threshold;
         let is_active = input.is_active.unwrap_or(current.is_active);
 
         sqlx::query(
-            "UPDATE routes SET name=?, virtual_model=?, strategy=?, target_provider=?, target_model=?, access_control=?, is_active=? WHERE id=?",
+            "UPDATE routes SET name=?, virtual_model=?, strategy=?, target_provider=?, target_model=?, access_control=?, route_type=?, cache_exact_ttl=?, cache_semantic_ttl=?, cache_semantic_threshold=?, is_active=? WHERE id=?",
         )
         .bind(name.trim())
         .bind(&virtual_model)
@@ -366,6 +383,10 @@ impl RouteStore for MySqlRouteStore {
         .bind(target_provider.trim())
         .bind(target_model.trim())
         .bind(access_control)
+        .bind(route_type)
+        .bind(cache_exact_ttl)
+        .bind(cache_semantic_ttl)
+        .bind(cache_semantic_threshold)
         .bind(is_active)
         .bind(id)
         .execute(&self.pool)
@@ -933,6 +954,18 @@ impl StorageBootstrap for MySqlBootstrap {
         let _ = sqlx::query("ALTER TABLE routes ADD COLUMN strategy VARCHAR(32) NULL")
             .execute(self.adapter.pool())
             .await;
+        let _ = sqlx::query("ALTER TABLE routes ADD COLUMN route_type VARCHAR(64) NULL")
+            .execute(self.adapter.pool())
+            .await;
+        let _ = sqlx::query("ALTER TABLE routes ADD COLUMN cache_exact_ttl BIGINT NULL")
+            .execute(self.adapter.pool())
+            .await;
+        let _ = sqlx::query("ALTER TABLE routes ADD COLUMN cache_semantic_ttl BIGINT NULL")
+            .execute(self.adapter.pool())
+            .await;
+        let _ = sqlx::query("ALTER TABLE routes ADD COLUMN cache_semantic_threshold DOUBLE NULL")
+            .execute(self.adapter.pool())
+            .await;
         let _ = sqlx::query("ALTER TABLE providers ADD COLUMN use_proxy BOOLEAN NOT NULL DEFAULT FALSE")
             .execute(self.adapter.pool())
             .await;
@@ -955,6 +988,22 @@ impl StorageBootstrap for MySqlBootstrap {
         sqlx::query("UPDATE routes SET strategy = 'weighted' WHERE strategy IS NULL OR TRIM(strategy) = ''")
             .execute(self.adapter.pool())
             .await?;
+        let _ = sqlx::query("UPDATE routes SET route_type = 'chat' WHERE route_type IS NULL OR TRIM(route_type) = ''")
+            .execute(self.adapter.pool())
+            .await;
+        let _ = sqlx::query(
+            "UPDATE routes SET cache_exact_ttl = cache_ttl WHERE cache_exact_ttl IS NULL AND cache_ttl IS NOT NULL",
+        )
+        .execute(self.adapter.pool())
+        .await;
+        let _ = sqlx::query(
+            "UPDATE routes SET cache_exact_ttl = 3600 WHERE cache_enabled = TRUE AND cache_exact_ttl IS NULL",
+        )
+        .execute(self.adapter.pool())
+        .await;
+        let _ = sqlx::query("UPDATE routes SET cache_exact_ttl = NULL WHERE cache_enabled = FALSE")
+            .execute(self.adapter.pool())
+            .await;
         sqlx::query(
             r#"
             INSERT INTO route_targets (id, route_id, provider_id, model, weight, priority, created_at)
@@ -997,7 +1046,7 @@ fn provider_select(suffix: Option<&str>) -> String {
 
 fn route_select(suffix: Option<&str>) -> String {
     let mut sql = String::from(
-        "SELECT id, name, virtual_model, COALESCE(strategy, 'weighted') AS strategy, target_provider, target_model, COALESCE(access_control, FALSE) AS access_control, is_active, DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS created_at FROM routes",
+        "SELECT id, name, virtual_model, COALESCE(strategy, 'weighted') AS strategy, target_provider, target_model, COALESCE(access_control, FALSE) AS access_control, COALESCE(route_type, 'chat') AS route_type, cache_exact_ttl, cache_semantic_ttl, cache_semantic_threshold, is_active, DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS created_at FROM routes",
     );
     if let Some(suffix) = suffix {
         sql.push(' ');
@@ -1146,8 +1195,12 @@ CREATE TABLE IF NOT EXISTS routes (
     name VARCHAR(255) NOT NULL,
     virtual_model VARCHAR(255) NULL,
     strategy VARCHAR(32) NULL,
+    route_type VARCHAR(64) NULL,
     target_provider VARCHAR(64) NOT NULL,
     target_model VARCHAR(255) NOT NULL,
+    cache_exact_ttl BIGINT NULL,
+    cache_semantic_ttl BIGINT NULL,
+    cache_semantic_threshold DOUBLE NULL,
     access_control BOOLEAN NOT NULL DEFAULT FALSE,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     priority INT NOT NULL DEFAULT 0,

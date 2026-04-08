@@ -37,20 +37,28 @@ pub struct Provider {
 pub struct Route {
     pub id: String,
     pub name: String,
+    #[serde(alias = "vmodel")]
     pub virtual_model: String,
     pub strategy: String,
     pub target_provider: String,
     pub target_model: String,
     pub access_control: bool,
     #[serde(default)]
+    #[serde(alias = "type")]
     #[sqlx(default)]
     pub route_type: String,
     #[serde(default)]
     #[sqlx(default)]
-    pub cache_enabled: Option<bool>,
+    pub cache_exact_ttl: Option<i64>,
     #[serde(default)]
     #[sqlx(default)]
-    pub cache_ttl: Option<i64>,
+    pub cache_semantic_ttl: Option<i64>,
+    #[serde(default)]
+    #[sqlx(default)]
+    pub cache_semantic_threshold: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[sqlx(skip)]
+    pub cache: Option<RouteCacheConfig>,
     pub is_active: bool,
     pub created_at: String,
     #[serde(default)]
@@ -198,6 +206,7 @@ pub struct UpdateProvider {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateRoute {
     pub name: Option<String>,
+    #[serde(alias = "vmodel")]
     pub virtual_model: Option<String>,
     pub strategy: Option<String>,
     pub target_provider: Option<String>,
@@ -205,15 +214,23 @@ pub struct UpdateRoute {
     #[serde(default)]
     pub targets: Option<Vec<UpsertRouteTarget>>,
     pub access_control: Option<bool>,
+    #[serde(alias = "type")]
     pub route_type: Option<String>,
-    pub cache_enabled: Option<bool>,
-    pub cache_ttl: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache: Option<RouteCacheConfig>,
+    #[serde(skip)]
+    pub cache_exact_ttl: Option<i64>,
+    #[serde(skip)]
+    pub cache_semantic_ttl: Option<i64>,
+    #[serde(skip)]
+    pub cache_semantic_threshold: Option<f64>,
     pub is_active: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateRoute {
     pub name: String,
+    #[serde(alias = "vmodel")]
     pub virtual_model: String,
     pub strategy: Option<String>,
     pub target_provider: String,
@@ -221,9 +238,35 @@ pub struct CreateRoute {
     #[serde(default)]
     pub targets: Vec<CreateRouteTarget>,
     pub access_control: Option<bool>,
+    #[serde(alias = "type")]
     pub route_type: Option<String>,
-    pub cache_enabled: Option<bool>,
-    pub cache_ttl: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache: Option<RouteCacheConfig>,
+    #[serde(skip)]
+    pub cache_exact_ttl: Option<i64>,
+    #[serde(skip)]
+    pub cache_semantic_ttl: Option<i64>,
+    #[serde(skip)]
+    pub cache_semantic_threshold: Option<f64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RouteCacheConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exact: Option<RouteExactCacheConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub semantic: Option<RouteSemanticCacheConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RouteExactCacheConfig {
+    pub ttl: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RouteSemanticCacheConfig {
+    pub ttl: Option<i64>,
+    pub threshold: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -332,6 +375,7 @@ pub struct ModelCapabilities {
     pub provider: String,
     pub model_id: String,
     pub context_window: u64,
+    pub embedding_length: Option<u64>,
     pub output_max_tokens: Option<u64>,
     pub tool_call: bool,
     pub reasoning: bool,
@@ -426,6 +470,20 @@ impl Provider {
             );
         }
         map
+    }
+}
+
+impl Route {
+    pub fn normalized_route_type(&self) -> &str {
+        if self.route_type.trim().eq_ignore_ascii_case("embedding") {
+            "embedding"
+        } else {
+            "chat"
+        }
+    }
+
+    pub fn is_embedding_route(&self) -> bool {
+        self.normalized_route_type() == "embedding"
     }
 }
 

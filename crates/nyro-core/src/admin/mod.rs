@@ -7,6 +7,10 @@ use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use serde_json::Value;
 
 use crate::db::models::*;
+use crate::protocol::{Protocol, ProviderProtocols};
+use crate::proxy::adapter;
+use crate::proxy::client::ProxyClient;
+use crate::router::TargetSelector;
 use crate::storage::traits::ProviderTestResult;
 use crate::Gateway;
 
@@ -355,6 +359,75 @@ impl AdminService {
         self.resolve_provider_model_capabilities(&provider, trimmed_model).await
     }
 
+    pub async fn detect_embedding_dimensions(&self, embedding_route: &str) -> anyhow::Result<u64> {
+        let route_name = embedding_route.trim();
+        if route_name.is_empty() {
+            anyhow::bail!("embedding_route cannot be empty");
+        }
+
+        let route = {
+            let cache = self.gw.route_cache.read().await;
+            cache.match_route(route_name).cloned()
+        }
+        .ok_or_else(|| anyhow::anyhow!("embedding route not found: {route_name}"))?;
+        if !route.is_embedding_route() {
+            anyhow::bail!("embedding route must be type=embedding: {route_name}");
+        }
+
+        let targets = load_route_targets_for_probe(&self.gw, &route).await;
+        if targets.is_empty() {
+            anyhow::bail!("embedding route has no targets: {route_name}");
+        }
+        let ordered_targets = TargetSelector::select_ordered(&route.strategy, &targets);
+        let mut missing_openai_endpoint = false;
+
+        for target in ordered_targets {
+            let provider = match self.gw.storage.providers().get(&target.provider_id).await? {
+                Some(provider) if provider.is_active => provider,
+                _ => continue,
+            };
+            let Some(openai_base_url) = resolve_openai_base_url(&provider) else {
+                missing_openai_endpoint = true;
+                continue;
+            };
+            let actual_model = if target.model.is_empty() || target.model == "*" {
+                route_name.to_string()
+            } else {
+                target.model.clone()
+            };
+            let adapter = adapter::get_adapter(&provider, Protocol::OpenAI);
+            let client = match self.gw.http_client_for_provider(provider.use_proxy).await {
+                Ok(http_client) => ProxyClient::new(http_client),
+                Err(_) => continue,
+            };
+            let call = client
+                .call_non_stream(
+                    adapter.as_ref(),
+                    &openai_base_url,
+                    "/v1/embeddings",
+                    &provider.api_key,
+                    serde_json::json!({
+                        "model": actual_model,
+                        "input": "nyro.embedding.dimensions.probe",
+                    }),
+                    HeaderMap::new(),
+                )
+                .await;
+            if let Ok((payload, status)) = call {
+                if status < 400 {
+                    if let Some(dims) = parse_embedding_dimensions_from_payload(&payload) {
+                        return Ok(dims);
+                    }
+                }
+            }
+        }
+
+        if missing_openai_endpoint {
+            anyhow::bail!("embedding route targets must expose protocol_endpoints.openai");
+        }
+        anyhow::bail!("failed to detect embedding dimensions for route: {route_name}")
+    }
+
     async fn resolve_provider_model_capabilities(
         &self,
         provider: &Provider,
@@ -459,6 +532,11 @@ impl AdminService {
         if let Some(store) = self.gw.storage.route_targets() {
             for route in &mut routes {
                 route.targets = store.list_targets_by_route(&route.id).await?;
+                route.cache = resolve_route_cache(route);
+            }
+        } else {
+            for route in &mut routes {
+                route.cache = resolve_route_cache(route);
             }
         }
         Ok(routes)
@@ -471,11 +549,20 @@ impl AdminService {
         self.ensure_route_unique(None, &input.virtual_model)
             .await?;
         let strategy = normalize_route_strategy(input.strategy.as_deref())?;
+        let route_type = normalize_route_type(input.route_type.as_deref(), "chat")?;
         let targets = normalize_create_route_targets(&input)?;
         ensure_route_targets_valid(&targets)?;
+        if route_type == "embedding" {
+            self.ensure_embedding_route_targets_openai(&targets).await?;
+            if has_route_cache_overrides(input.cache.as_ref()) {
+                anyhow::bail!("embedding routes do not support route cache configuration");
+            }
+        }
         let primary_target = targets
             .first()
             .ok_or_else(|| anyhow::anyhow!("at least one route target is required"))?;
+        let (cache_exact_ttl, cache_semantic_ttl, cache_semantic_threshold) =
+            flatten_route_cache_columns(input.cache.as_ref());
 
         let route = self
             .gw
@@ -489,9 +576,11 @@ impl AdminService {
                 target_model: primary_target.model.clone(),
                 targets: vec![],
                 access_control: input.access_control,
-                route_type: input.route_type,
-                cache_enabled: input.cache_enabled,
-                cache_ttl: input.cache_ttl,
+                route_type: Some(route_type),
+                cache: None,
+                cache_exact_ttl,
+                cache_semantic_ttl,
+                cache_semantic_threshold,
             })
             .await?;
         if let Some(store) = self.gw.storage.route_targets() {
@@ -514,13 +603,36 @@ impl AdminService {
             .clone()
             .unwrap_or_else(|| current.virtual_model.clone());
         let strategy = normalize_route_strategy(input.strategy.as_deref().or(Some(&current.strategy)))?;
+        let route_type = normalize_optional_route_type(input.route_type.as_deref())?;
+        let effective_route_type = if let Some(value) = route_type.as_deref() {
+            normalize_route_type(Some(value), "chat")?
+        } else {
+            current.normalized_route_type().to_string()
+        };
         let targets = normalize_update_route_targets(&current, &input)?;
         ensure_route_targets_valid(&targets)?;
+        if effective_route_type == "embedding" {
+            self.ensure_embedding_route_targets_openai(&targets).await?;
+        }
         let primary_target = targets
             .first()
             .ok_or_else(|| anyhow::anyhow!("at least one route target is required"))?;
         let access_control = input.access_control.unwrap_or(current.access_control);
         let is_active = input.is_active.unwrap_or(current.is_active);
+        let (cache_exact_ttl, cache_semantic_ttl, cache_semantic_threshold) = if effective_route_type == "embedding" {
+            if has_route_cache_overrides(input.cache.as_ref()) {
+                anyhow::bail!("embedding routes do not support route cache configuration");
+            }
+            (None, None, None)
+        } else if let Some(cache) = input.cache.as_ref() {
+            flatten_route_cache_columns(Some(cache))
+        } else {
+            (
+                current.cache_exact_ttl,
+                current.cache_semantic_ttl,
+                current.cache_semantic_threshold,
+            )
+        };
         ensure_virtual_model(&virtual_model)?;
         self.ensure_route_unique(Some(id), &virtual_model)
             .await?;
@@ -538,9 +650,11 @@ impl AdminService {
                     target_model: Some(primary_target.model.clone()),
                     targets: None,
                     access_control: Some(access_control),
-                    route_type: input.route_type,
-                    cache_enabled: input.cache_enabled,
-                    cache_ttl: input.cache_ttl,
+                    route_type,
+                    cache: None,
+                    cache_exact_ttl,
+                    cache_semantic_ttl,
+                    cache_semantic_threshold,
                     is_active: Some(is_active),
                 },
             )
@@ -693,40 +807,52 @@ impl AdminService {
     }
 
     pub async fn get_cache_settings(&self) -> anyhow::Result<serde_json::Value> {
-        Ok(serde_json::json!({
-            "enabled": self.gw.config.cache.enabled,
-            "cache_type": format!("{:?}", self.gw.config.cache.cache_type).to_lowercase(),
-            "backend": self.gw.cache_backend.as_ref().map(|b| b.backend_name()).unwrap_or("disabled"),
-            "default_ttl_secs": self.gw.config.cache.default_ttl.as_secs(),
-            "max_entries": self.gw.config.cache.max_entries,
-            "namespace": self.gw.config.cache.namespace,
-            "mode": format!("{:?}", self.gw.config.cache.mode).to_lowercase(),
-        }))
+        let runtime = self.gw.effective_cache_config().await;
+        Ok(runtime.to_admin_json())
+    }
+
+    pub async fn update_cache_settings(&self, input: serde_json::Value) -> anyhow::Result<()> {
+        let parsed = crate::cache::CacheConfig::from_admin_json(&input)
+            .ok_or_else(|| anyhow::anyhow!("invalid cache settings payload"))?;
+        self.gw.reload_cache_runtime(parsed.clone()).await?;
+        let raw = serde_json::to_string(&parsed.to_admin_json())?;
+        self.gw
+            .storage
+            .settings()
+            .set("cache_settings", &raw)
+            .await
     }
 
     pub async fn flush_cache(&self) -> anyhow::Result<()> {
-        if let Some(cache) = &self.gw.cache_backend {
+        let cache_backend = self.gw.cache_backend.read().await.clone();
+        if let Some(cache) = cache_backend {
             cache.flush().await?;
         }
         Ok(())
     }
 
     pub async fn delete_cache_key(&self, key: &str) -> anyhow::Result<()> {
-        if let Some(cache) = &self.gw.cache_backend {
+        let cache_backend = self.gw.cache_backend.read().await.clone();
+        if let Some(cache) = cache_backend {
             cache.delete(key).await?;
         }
         Ok(())
     }
 
     pub async fn get_cache_stats(&self) -> anyhow::Result<serde_json::Value> {
-        let healthy = if let Some(cache) = &self.gw.cache_backend {
+        let runtime = self.gw.effective_cache_config().await;
+        let cache_backend = self.gw.cache_backend.read().await.clone();
+        let vector_store = self.gw.vector_store.read().await.clone();
+        let healthy = if let Some(cache) = cache_backend.as_ref() {
             cache.ping().await.unwrap_or(false)
         } else {
             false
         };
         Ok(serde_json::json!({
-            "enabled": self.gw.config.cache.enabled,
-            "backend": self.gw.cache_backend.as_ref().map(|b| b.backend_name()).unwrap_or("disabled"),
+            "exact_enabled": runtime.exact.enabled,
+            "semantic_enabled": runtime.semantic.enabled,
+            "backend": cache_backend.as_ref().map(|b| b.backend_name()).unwrap_or("disabled"),
+            "vector_store": if vector_store.is_some() { "memory" } else { "disabled" },
             "healthy": healthy,
             "singleflight_in_flight": self.gw.cache_in_flight.len(),
         }))
@@ -849,8 +975,10 @@ impl AdminService {
                             targets: vec![],
                             access_control: Some(r.access_control),
                             route_type: Some("chat".to_string()),
-                            cache_enabled: None,
-                            cache_ttl: None,
+                            cache: None,
+                            cache_exact_ttl: None,
+                            cache_semantic_ttl: None,
+                            cache_semantic_threshold: None,
                         })
                         .await
                         .is_ok()
@@ -959,6 +1087,7 @@ impl AdminService {
         if let Some(store) = self.gw.storage.route_targets() {
             route.targets = store.list_targets_by_route(&route.id).await?;
         }
+        route.cache = resolve_route_cache(&route);
         Ok(route)
     }
 
@@ -977,6 +1106,65 @@ impl AdminService {
             .api_keys()
             .context("selected storage backend does not support api key management")
     }
+
+    async fn ensure_embedding_route_targets_openai(
+        &self,
+        targets: &[CreateRouteTarget],
+    ) -> anyhow::Result<()> {
+        for target in targets {
+            let provider = self
+                .gw
+                .storage
+                .providers()
+                .get(&target.provider_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("provider not found: {}", target.provider_id))?;
+            if !provider_supports_openai_endpoint(&provider) {
+                anyhow::bail!(
+                    "embedding route target provider '{}' does not expose an openai endpoint",
+                    provider.name
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+fn flatten_route_cache_columns(
+    cache: Option<&RouteCacheConfig>,
+) -> (Option<i64>, Option<i64>, Option<f64>) {
+    let Some(cache) = cache else {
+        return (None, None, None);
+    };
+    let exact_ttl = cache.exact.as_ref().map(|exact| exact.ttl.unwrap_or(0));
+    let semantic_ttl = cache.semantic.as_ref().map(|semantic| semantic.ttl.unwrap_or(0));
+    let semantic_threshold = cache.semantic.as_ref().and_then(|semantic| semantic.threshold);
+    (exact_ttl, semantic_ttl, semantic_threshold)
+}
+
+fn resolve_route_cache(route: &Route) -> Option<RouteCacheConfig> {
+    if route.is_embedding_route() {
+        return None;
+    }
+    let exact = route.cache_exact_ttl.map(|ttl| RouteExactCacheConfig {
+        ttl: if ttl > 0 { Some(ttl) } else { None },
+    });
+    let semantic = route.cache_semantic_ttl.map(|ttl| RouteSemanticCacheConfig {
+        ttl: if ttl > 0 { Some(ttl) } else { None },
+        threshold: route.cache_semantic_threshold,
+    });
+    if exact.is_none() && semantic.is_none() {
+        None
+    } else {
+        Some(RouteCacheConfig { exact, semantic })
+    }
+}
+
+fn has_route_cache_overrides(cache: Option<&RouteCacheConfig>) -> bool {
+    let Some(cache) = cache else {
+        return false;
+    };
+    cache.exact.is_some() || cache.semantic.is_some()
 }
 
 fn format_connectivity_error(error: &reqwest::Error) -> String {
@@ -1015,6 +1203,24 @@ fn normalize_route_strategy(strategy: Option<&str>) -> anyhow::Result<String> {
     match normalized.as_str() {
         "weighted" | "priority" => Ok(normalized),
         _ => anyhow::bail!("unsupported route strategy: {normalized}"),
+    }
+}
+
+fn normalize_route_type(route_type: Option<&str>, default_value: &str) -> anyhow::Result<String> {
+    let normalized = route_type
+        .unwrap_or(default_value)
+        .trim()
+        .to_ascii_lowercase();
+    match normalized.as_str() {
+        "chat" | "embedding" => Ok(normalized),
+        _ => anyhow::bail!("unsupported route type: {normalized}"),
+    }
+}
+
+fn normalize_optional_route_type(route_type: Option<&str>) -> anyhow::Result<Option<String>> {
+    match route_type {
+        Some(value) => Ok(Some(normalize_route_type(Some(value), "chat")?)),
+        None => Ok(None),
     }
 }
 
@@ -1133,6 +1339,23 @@ fn resolve_models_endpoint(provider: &Provider) -> Option<String> {
     }
 }
 
+fn provider_supports_openai_endpoint(provider: &Provider) -> bool {
+    resolve_openai_base_url(provider).is_some()
+}
+
+fn resolve_openai_base_url(provider: &Provider) -> Option<String> {
+    let protocols = ProviderProtocols::from_provider(provider);
+    if !protocols.supports(Protocol::OpenAI) {
+        return None;
+    }
+    let resolved = protocols.resolve_egress(Protocol::OpenAI);
+    let trimmed = resolved.base_url.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
 fn build_model_headers(
     protocol: &str,
     vendor: Option<&str>,
@@ -1248,6 +1471,7 @@ fn is_ollama_show_endpoint(url: &str) -> bool {
 }
 
 fn parse_ollama_capability(json: &Value, model: &str) -> ModelCapabilities {
+    let model_info = json.get("model_info").and_then(Value::as_object);
     let caps = json
         .get("capabilities")
         .and_then(Value::as_array)
@@ -1259,16 +1483,16 @@ fn parse_ollama_capability(json: &Value, model: &str) -> ModelCapabilities {
         })
         .unwrap_or_default();
     let has_vision = caps.iter().any(|c| c.eq_ignore_ascii_case("vision"));
-    let context_window = json
-        .get("model_info")
-        .and_then(Value::as_object)
+    let context_window = model_info
         .and_then(extract_ollama_context_window)
         .unwrap_or(8 * 1024);
+    let embedding_length = model_info.and_then(extract_ollama_embedding_length);
 
     ModelCapabilities {
         provider: "ollama".to_string(),
         model_id: model.to_string(),
         context_window,
+        embedding_length,
         output_max_tokens: None,
         tool_call: caps.iter().any(|c| c == "tools"),
         reasoning: caps.iter().any(|c| c == "thinking"),
@@ -1289,6 +1513,20 @@ fn extract_ollama_context_window(model_info: &serde_json::Map<String, Value>) ->
     model_info
         .get(&key)
         .and_then(Value::as_u64)
+        .filter(|value| *value > 0)
+}
+
+fn extract_ollama_embedding_length(model_info: &serde_json::Map<String, Value>) -> Option<u64> {
+    if let Some(arch) = model_info.get("general.architecture").and_then(Value::as_str) {
+        let key = format!("{arch}.embedding_length");
+        if let Some(value) = model_info.get(&key).and_then(Value::as_u64).filter(|value| *value > 0) {
+            return Some(value);
+        }
+    }
+    model_info
+        .get("embedding_length")
+        .and_then(Value::as_u64)
+        .or_else(|| model_info.get("general.embedding_length").and_then(Value::as_u64))
         .filter(|value| *value > 0)
 }
 
@@ -1542,6 +1780,7 @@ fn parse_http_capability(json: &Value, model: &str) -> Option<ModelCapabilities>
         provider: "openrouter".to_string(),
         model_id: model_id.to_string(),
         context_window,
+        embedding_length: None,
         output_max_tokens,
         tool_call,
         reasoning,
@@ -1564,6 +1803,39 @@ fn parse_maybe_price_per_token(value: &Value) -> Option<f64> {
         return None;
     }
     Some(parsed * 1_000_000.0)
+}
+
+async fn load_route_targets_for_probe(gw: &Gateway, route: &Route) -> Vec<RouteTarget> {
+    if let Some(store) = gw.storage.route_targets() {
+        if let Ok(targets) = store.list_targets_by_route(&route.id).await {
+            if !targets.is_empty() {
+                return targets;
+            }
+        }
+    }
+    if route.target_provider.trim().is_empty() {
+        return vec![];
+    }
+    vec![RouteTarget {
+        id: String::new(),
+        route_id: route.id.clone(),
+        provider_id: route.target_provider.clone(),
+        model: route.target_model.clone(),
+        weight: 100,
+        priority: 1,
+        created_at: String::new(),
+    }]
+}
+
+fn parse_embedding_dimensions_from_payload(payload: &Value) -> Option<u64> {
+    payload
+        .get("data")
+        .and_then(Value::as_array)?
+        .first()?
+        .get("embedding")
+        .and_then(Value::as_array)
+        .map(|embedding| embedding.len() as u64)
+        .filter(|value| *value > 0)
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -1629,6 +1901,7 @@ fn to_models_dev_capability(vendor_key: &str, model: &ModelsDevModelEntry) -> Mo
         provider: vendor_key.to_string(),
         model_id: model.id.clone(),
         context_window: model.limit.context.filter(|v| *v > 0).unwrap_or(128 * 1024),
+        embedding_length: None,
         output_max_tokens: model.limit.output.filter(|v| *v > 0),
         tool_call: model.tool_call,
         reasoning: model.reasoning,

@@ -26,6 +26,8 @@ export interface Route {
   target_provider: string;
   target_model: string;
   access_control: boolean;
+  route_type?: "chat" | "embedding";
+  cache?: RouteCacheConfig;
   is_active: boolean;
   created_at: string;
   targets: RouteTarget[];
@@ -128,6 +130,7 @@ export interface ModelCapabilities {
   provider: string;
   model_id: string;
   context_window: number;
+  embedding_length?: number | null;
   tool_call: boolean;
   reasoning: boolean;
   input_modalities: string[];
@@ -202,6 +205,8 @@ export interface CreateRoute {
   target_model: string;
   targets?: CreateRouteTarget[];
   access_control?: boolean;
+  route_type?: "chat" | "embedding";
+  cache?: RouteCacheConfig | null;
 }
 
 export interface UpdateRoute {
@@ -212,7 +217,41 @@ export interface UpdateRoute {
   target_model?: string;
   targets?: UpsertRouteTarget[];
   access_control?: boolean;
+  route_type?: "chat" | "embedding";
+  cache?: RouteCacheConfig | null;
   is_active?: boolean;
+}
+
+export interface RouteCacheConfig {
+  exact?: RouteExactCacheConfig;
+  semantic?: RouteSemanticCacheConfig;
+}
+
+export interface RouteExactCacheConfig {
+  ttl?: number | null;
+}
+
+export interface RouteSemanticCacheConfig {
+  ttl?: number | null;
+  threshold?: number | null;
+}
+
+export interface CacheSettings {
+  exact: {
+    enabled: boolean;
+    storage: "memory" | "database";
+    default_ttl: number;
+    max_entries: number;
+  };
+  semantic: {
+    enabled: boolean;
+    storage: "memory";
+    embedding_route: string;
+    similarity_threshold: number;
+    vector_dimensions: number;
+    default_ttl: number;
+    max_entries: number;
+  };
 }
 
 export interface CreateRouteTarget {

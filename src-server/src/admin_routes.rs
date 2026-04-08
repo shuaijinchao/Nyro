@@ -69,7 +69,8 @@ pub fn create_router(gateway: Gateway, admin_key: Option<String>) -> Router {
         .route("/stats/models", get(stats_by_model))
         .route("/stats/providers", get(stats_by_provider))
         .route("/settings/:key", get(get_setting).put(set_setting))
-        .route("/cache/settings", get(get_cache_settings))
+        .route("/cache/settings", get(get_cache_settings).put(update_cache_settings))
+        .route("/cache/embedding-dimensions", get(detect_embedding_dimensions))
         .route("/cache/flush", post(flush_cache))
         .route("/cache/:key", delete(delete_cache_key))
         .route("/cache/stats", get(get_cache_stats))
@@ -399,6 +400,35 @@ async fn set_setting(
 
 async fn get_cache_settings(State(gw): State<Gateway>) -> impl IntoResponse {
     match gw.admin().get_cache_settings().await {
+        Ok(v) => Json(serde_json::json!({ "data": v })).into_response(),
+        Err(e) => err(e),
+    }
+}
+
+async fn update_cache_settings(
+    State(gw): State<Gateway>,
+    Json(input): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    match gw.admin().update_cache_settings(input).await {
+        Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
+        Err(e) => err(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct EmbeddingDimensionsQuery {
+    embedding_route: String,
+}
+
+async fn detect_embedding_dimensions(
+    State(gw): State<Gateway>,
+    Query(query): Query<EmbeddingDimensionsQuery>,
+) -> impl IntoResponse {
+    match gw
+        .admin()
+        .detect_embedding_dimensions(&query.embedding_route)
+        .await
+    {
         Ok(v) => Json(serde_json::json!({ "data": v })).into_response(),
         Err(e) => err(e),
     }

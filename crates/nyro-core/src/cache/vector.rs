@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::collections::HashMap;
 
 use async_trait::async_trait;
 use tokio::sync::RwLock;
@@ -7,58 +8,110 @@ use tokio::sync::RwLock;
 pub struct VectorStoreEntry {
     pub key: String,
     pub vector: Vec<f32>,
+    pub data: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub struct VectorHit {
+    pub key: String,
+    pub data: Vec<u8>,
+    pub score: f64,
 }
 
 #[async_trait]
 pub trait VectorStore: Send + Sync {
-    async fn upsert(&self, key: String, vector: Vec<f32>) -> anyhow::Result<()>;
-    async fn search(&self, query: &[f32], threshold: f64) -> anyhow::Result<Option<String>>;
+    async fn upsert(
+        &self,
+        partition: &str,
+        key: String,
+        vector: Vec<f32>,
+        data: Vec<u8>,
+    ) -> anyhow::Result<()>;
+    async fn search(
+        &self,
+        partition: &str,
+        query: &[f32],
+        threshold: f64,
+    ) -> anyhow::Result<Option<VectorHit>>;
     async fn clear(&self) -> anyhow::Result<()>;
+    async fn clear_partition(&self, partition: &str) -> anyhow::Result<()>;
 }
 
-#[derive(Clone, Default)]
-pub struct InMemoryVectorStore {
-    entries: Arc<RwLock<Vec<VectorStoreEntry>>>,
+#[derive(Clone)]
+pub struct MemoryVectorStore {
+    entries: Arc<RwLock<HashMap<String, Vec<VectorStoreEntry>>>>,
+    max_entries: usize,
 }
 
-impl InMemoryVectorStore {
-    pub fn new() -> Self {
-        Self::default()
+impl MemoryVectorStore {
+    pub fn new(max_entries: usize) -> Self {
+        Self {
+            entries: Arc::new(RwLock::new(HashMap::new())),
+            max_entries: max_entries.max(1),
+        }
     }
 }
 
 #[async_trait]
-impl VectorStore for InMemoryVectorStore {
-    async fn upsert(&self, key: String, vector: Vec<f32>) -> anyhow::Result<()> {
+impl VectorStore for MemoryVectorStore {
+    async fn upsert(
+        &self,
+        partition: &str,
+        key: String,
+        vector: Vec<f32>,
+        data: Vec<u8>,
+    ) -> anyhow::Result<()> {
         let mut entries = self.entries.write().await;
-        if let Some(existing) = entries.iter_mut().find(|entry| entry.key == key) {
+        let bucket = entries.entry(partition.to_string()).or_default();
+        if let Some(existing) = bucket.iter_mut().find(|entry| entry.key == key) {
             existing.vector = vector;
+            existing.data = data;
             return Ok(());
         }
-        entries.push(VectorStoreEntry { key, vector });
+        if bucket.len() >= self.max_entries {
+            bucket.remove(0);
+        }
+        bucket.push(VectorStoreEntry { key, vector, data });
         Ok(())
     }
 
-    async fn search(&self, query: &[f32], threshold: f64) -> anyhow::Result<Option<String>> {
+    async fn search(
+        &self,
+        partition: &str,
+        query: &[f32],
+        threshold: f64,
+    ) -> anyhow::Result<Option<VectorHit>> {
         let entries = self.entries.read().await;
-        let mut best: Option<(f64, String)> = None;
-        for entry in entries.iter() {
+        let Some(bucket) = entries.get(partition) else {
+            return Ok(None);
+        };
+        let mut best: Option<VectorHit> = None;
+        for entry in bucket {
             let similarity = cosine_similarity(query, &entry.vector);
             if similarity >= threshold {
                 if best
                     .as_ref()
-                    .map(|(score, _)| similarity > *score)
+                    .map(|hit| similarity > hit.score)
                     .unwrap_or(true)
                 {
-                    best = Some((similarity, entry.key.clone()));
+                    best = Some(VectorHit {
+                        key: entry.key.clone(),
+                        data: entry.data.clone(),
+                        score: similarity,
+                    });
                 }
             }
         }
-        Ok(best.map(|(_, key)| key))
+        Ok(best)
     }
 
     async fn clear(&self) -> anyhow::Result<()> {
         self.entries.write().await.clear();
+        Ok(())
+    }
+
+    async fn clear_partition(&self, partition: &str) -> anyhow::Result<()> {
+        self.entries.write().await.remove(partition);
         Ok(())
     }
 }

@@ -902,6 +902,11 @@ html[data-theme="dark"] .connect-label-badge {
   color: #f8fafc !important;
 }
 
+html[data-theme="dark"] .route-targets-panel {
+  border-color: rgba(148, 163, 184, 0.34) !important;
+  background: rgba(8, 12, 20, 0.86) !important;
+}
+
 html[data-theme="dark"] .provider-preset-card:hover {
   border-color: rgba(255, 255, 255, 0.2) !important;
   background: rgba(10, 13, 21, 0.82) !important;
