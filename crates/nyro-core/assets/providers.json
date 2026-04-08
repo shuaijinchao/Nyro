@@ -193,7 +193,7 @@
           "anthropic": "https://api.z.ai/api/anthropic"
         },
         "modelsSource": "https://api.z.ai/api/paas/v4/models",
-        "capabilitiesSource": "ai://models.dev/zhipuai"
+        "capabilitiesSource": "ai://models.dev/zai"
       },
       {
         "id": "coding",
@@ -203,7 +203,7 @@
           "anthropic": "https://api.z.ai/api/anthropic"
         },
         "modelsSource": "https://api.z.ai/api/coding/paas/v4/models",
-        "capabilitiesSource": "ai://models.dev/zhipuai"
+        "capabilitiesSource": "ai://models.dev/zai"
       }
     ]
   },
