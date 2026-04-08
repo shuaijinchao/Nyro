@@ -2,7 +2,7 @@ use sha2::{Digest, Sha256};
 
 use crate::protocol::types::{ContentBlock, InternalRequest, MessageContent};
 
-pub fn build_cache_key(namespace: Option<&str>, request: &InternalRequest) -> String {
+pub fn build_cache_key(request: &InternalRequest) -> String {
     let mut source = String::new();
     source.push_str("model:");
     source.push_str(request.model.trim());
@@ -59,10 +59,11 @@ pub fn build_cache_key(namespace: Option<&str>, request: &InternalRequest) -> St
     }
 
     let digest = Sha256::digest(source.as_bytes());
-    let hash = format!("{:x}", digest);
-    if let Some(ns) = namespace.filter(|v| !v.trim().is_empty()) {
-        format!("{}:{}", ns.trim(), hash)
-    } else {
-        hash
-    }
+    format!("{:x}", digest)
+}
+
+pub fn build_semantic_partition(model: &str, system_prompt: &str) -> String {
+    let source = format!("model:{}|system:{}", model.trim(), system_prompt.trim());
+    let digest = Sha256::digest(source.as_bytes());
+    format!("{:x}", digest)
 }

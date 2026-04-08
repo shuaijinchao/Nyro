@@ -25,7 +25,10 @@ use logging::LogEntry;
 use storage::sql::config::SqlBackendConfig;
 use storage::{DynStorage, MySqlStorage, PostgresStorage, SqliteStorage};
 use crate::router::health::HealthRegistry;
-use crate::cache::{CacheBackend, CacheBackendKind, DatabaseCacheBackend, InMemoryCacheBackend};
+use crate::cache::{
+    CacheBackend, CacheConfig, CacheStorageKind, DatabaseCacheBackend, InMemoryCacheBackend,
+    MemoryVectorStore, VectorStore, VectorStorageKind,
+};
 
 #[derive(Clone, Debug)]
 pub struct CapabilityCacheEntry {
@@ -43,7 +46,9 @@ pub struct Gateway {
     pub health_registry: Arc<HealthRegistry>,
     pub ollama_capability_cache: Arc<tokio::sync::RwLock<HashMap<String, CapabilityCacheEntry>>>,
     pub log_tx: mpsc::Sender<LogEntry>,
-    pub cache_backend: Option<Arc<dyn CacheBackend>>,
+    pub runtime_cache_config: Arc<tokio::sync::RwLock<CacheConfig>>,
+    pub cache_backend: Arc<tokio::sync::RwLock<Option<Arc<dyn CacheBackend>>>>,
+    pub vector_store: Arc<tokio::sync::RwLock<Option<Arc<dyn VectorStore>>>>,
     pub cache_in_flight: Arc<DashMap<String, broadcast::Sender<Vec<u8>>>>,
 }
 
@@ -101,6 +106,7 @@ impl Gateway {
         ));
         let health_registry = Arc::new(HealthRegistry::new());
         let ollama_capability_cache = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+        let bootstrap_cache = config.cache.clone();
 
         let (log_tx, log_rx) = mpsc::channel(1024);
 
@@ -113,20 +119,21 @@ impl Gateway {
             health_registry,
             ollama_capability_cache,
             log_tx,
-            cache_backend: None,
+            runtime_cache_config: Arc::new(tokio::sync::RwLock::new(bootstrap_cache)),
+            cache_backend: Arc::new(tokio::sync::RwLock::new(None)),
+            vector_store: Arc::new(tokio::sync::RwLock::new(None)),
             cache_in_flight: Arc::new(DashMap::new()),
         };
 
-        let cache_backend: Option<Arc<dyn CacheBackend>> = if gw.config.cache.enabled {
-            match gw.config.cache.backend {
-                CacheBackendKind::InMemory => Some(Arc::new(InMemoryCacheBackend::new(gw.config.cache.max_entries))),
-                CacheBackendKind::Database => Some(Arc::new(DatabaseCacheBackend::new(gw.storage.clone()))),
-            }
-        } else {
-            None
-        };
-        let mut gw = gw;
-        gw.cache_backend = cache_backend;
+        let runtime_cache = gw
+            .storage
+            .settings()
+            .get("cache_settings")
+            .await?
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+            .and_then(|value| CacheConfig::from_admin_json(&value))
+            .unwrap_or_else(|| gw.config.cache.clone());
+        gw.reload_cache_runtime(runtime_cache).await?;
 
         {
             let data_dir = gw.config.data_dir.clone();
@@ -136,7 +143,86 @@ impl Gateway {
             });
         }
 
+        // Memory vector store is ephemeral across restarts; no fingerprint check needed.
+
         Ok((gw, log_rx))
+    }
+
+    pub async fn effective_cache_config(&self) -> CacheConfig {
+        self.runtime_cache_config.read().await.clone()
+    }
+
+    pub async fn reload_cache_runtime(&self, mut next: CacheConfig) -> anyhow::Result<()> {
+        let current = self.runtime_cache_config.read().await.clone();
+
+        let exact_needs_rebuild = current.exact.enabled != next.exact.enabled
+            || current.exact.storage != next.exact.storage
+            || current.exact.max_entries != next.exact.max_entries;
+        let next_cache_backend: Option<Arc<dyn CacheBackend>> = if exact_needs_rebuild {
+            if next.exact.enabled {
+                match next.exact.storage {
+                    CacheStorageKind::Memory => {
+                        Some(Arc::new(InMemoryCacheBackend::new(next.exact.max_entries)))
+                    }
+                    CacheStorageKind::Database => {
+                        Some(Arc::new(DatabaseCacheBackend::new(self.storage.clone())))
+                    }
+                }
+            } else {
+                None
+            }
+        } else {
+            self.cache_backend.read().await.clone()
+        };
+
+        let semantic_needs_rebuild = current.semantic.enabled != next.semantic.enabled
+            || current.semantic.storage != next.semantic.storage
+            || current.semantic.max_entries != next.semantic.max_entries
+            || current.semantic.embedding_route != next.semantic.embedding_route
+            || current.semantic.vector_dimensions != next.semantic.vector_dimensions;
+        let next_vector_store: Option<Arc<dyn VectorStore>> = if semantic_needs_rebuild {
+            if next.semantic.enabled {
+                let embedding_route = next.semantic.embedding_route.trim();
+                if embedding_route.is_empty() {
+                    tracing::warn!(
+                        "semantic cache enabled but embedding_route is empty; semantic cache disabled"
+                    );
+                    next.semantic.enabled = false;
+                    None
+                } else {
+                    let route_valid = {
+                        let route_cache = self.route_cache.read().await;
+                        route_cache
+                            .match_route(embedding_route)
+                            .map(|route| route.is_embedding_route())
+                            .unwrap_or(false)
+                    };
+                    if !route_valid {
+                        tracing::warn!(
+                            "semantic cache embedding route '{}' not found or not type=embedding; semantic cache disabled",
+                            embedding_route
+                        );
+                        next.semantic.enabled = false;
+                        None
+                    } else {
+                        match next.semantic.storage {
+                            VectorStorageKind::Memory => {
+                                Some(Arc::new(MemoryVectorStore::new(next.semantic.max_entries)))
+                            }
+                        }
+                    }
+                }
+            } else {
+                None
+            }
+        } else {
+            self.vector_store.read().await.clone()
+        };
+
+        *self.cache_backend.write().await = next_cache_backend;
+        *self.vector_store.write().await = next_vector_store;
+        *self.runtime_cache_config.write().await = next;
+        Ok(())
     }
 
     pub async fn start_proxy(&self) -> anyhow::Result<()> {

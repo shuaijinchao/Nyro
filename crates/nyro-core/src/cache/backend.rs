@@ -36,7 +36,7 @@ impl InMemoryCacheBackend {
         Self {
             entries: Arc::new(RwLock::new(HashMap::new())),
             max_entries: max_entries.max(1),
-            name: "in_memory".to_string(),
+            name: "memory".to_string(),
         }
     }
 

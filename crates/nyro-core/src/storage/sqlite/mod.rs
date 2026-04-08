@@ -287,7 +287,7 @@ impl SqliteRouteStore {
 impl RouteStore for SqliteRouteStore {
     async fn list(&self) -> anyhow::Result<Vec<Route>> {
         Ok(sqlx::query_as::<_, Route>(
-            "SELECT id, name, virtual_model, COALESCE(strategy, 'weighted') AS strategy, target_provider, target_model, COALESCE(access_control, 0) AS access_control, is_active, created_at FROM routes ORDER BY created_at DESC",
+            "SELECT id, name, virtual_model, COALESCE(strategy, 'weighted') AS strategy, target_provider, target_model, COALESCE(access_control, 0) AS access_control, COALESCE(route_type, 'chat') AS route_type, cache_exact_ttl, cache_semantic_ttl, cache_semantic_threshold, is_active, created_at FROM routes ORDER BY created_at DESC",
         )
         .fetch_all(&self.pool)
         .await?)
@@ -295,7 +295,7 @@ impl RouteStore for SqliteRouteStore {
 
     async fn get(&self, id: &str) -> anyhow::Result<Option<Route>> {
         Ok(sqlx::query_as::<_, Route>(
-            "SELECT id, name, virtual_model, COALESCE(strategy, 'weighted') AS strategy, target_provider, target_model, COALESCE(access_control, 0) AS access_control, is_active, created_at FROM routes WHERE id = ?",
+            "SELECT id, name, virtual_model, COALESCE(strategy, 'weighted') AS strategy, target_provider, target_model, COALESCE(access_control, 0) AS access_control, COALESCE(route_type, 'chat') AS route_type, cache_exact_ttl, cache_semantic_ttl, cache_semantic_threshold, is_active, created_at FROM routes WHERE id = ?",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -306,9 +306,14 @@ impl RouteStore for SqliteRouteStore {
         let id = uuid::Uuid::new_v4().to_string();
         let virtual_model = input.virtual_model.trim().to_string();
         let strategy = input.strategy.unwrap_or_else(|| "weighted".to_string());
+        let route_type = input
+            .route_type
+            .unwrap_or_else(|| "chat".to_string())
+            .trim()
+            .to_string();
         if self.has_match_pattern_column().await? {
             sqlx::query(
-                "INSERT INTO routes (id, name, virtual_model, match_pattern, strategy, target_provider, target_model, access_control) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO routes (id, name, virtual_model, match_pattern, strategy, target_provider, target_model, access_control, route_type, cache_exact_ttl, cache_semantic_ttl, cache_semantic_threshold) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(&id)
             .bind(input.name.trim())
@@ -318,11 +323,15 @@ impl RouteStore for SqliteRouteStore {
             .bind(input.target_provider.trim())
             .bind(input.target_model.trim())
             .bind(input.access_control.unwrap_or(false))
+            .bind(route_type)
+            .bind(input.cache_exact_ttl)
+            .bind(input.cache_semantic_ttl)
+            .bind(input.cache_semantic_threshold)
             .execute(&self.pool)
             .await?;
         } else {
             sqlx::query(
-                "INSERT INTO routes (id, name, virtual_model, strategy, target_provider, target_model, access_control) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO routes (id, name, virtual_model, strategy, target_provider, target_model, access_control, route_type, cache_exact_ttl, cache_semantic_ttl, cache_semantic_threshold) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(&id)
             .bind(input.name.trim())
@@ -331,6 +340,10 @@ impl RouteStore for SqliteRouteStore {
             .bind(input.target_provider.trim())
             .bind(input.target_model.trim())
             .bind(input.access_control.unwrap_or(false))
+            .bind(route_type)
+            .bind(input.cache_exact_ttl)
+            .bind(input.cache_semantic_ttl)
+            .bind(input.cache_semantic_threshold)
             .execute(&self.pool)
             .await?;
         }
@@ -349,11 +362,19 @@ impl RouteStore for SqliteRouteStore {
         let target_provider = input.target_provider.unwrap_or(current.target_provider);
         let target_model = input.target_model.unwrap_or(current.target_model);
         let access_control = input.access_control.unwrap_or(current.access_control);
+        let route_type = input
+            .route_type
+            .unwrap_or(current.route_type)
+            .trim()
+            .to_string();
+        let cache_exact_ttl = input.cache_exact_ttl;
+        let cache_semantic_ttl = input.cache_semantic_ttl;
+        let cache_semantic_threshold = input.cache_semantic_threshold;
         let is_active = input.is_active.unwrap_or(current.is_active);
 
         if self.has_match_pattern_column().await? {
             sqlx::query(
-                "UPDATE routes SET name=?, virtual_model=?, match_pattern=?, strategy=?, target_provider=?, target_model=?, access_control=?, is_active=? WHERE id=?",
+                "UPDATE routes SET name=?, virtual_model=?, match_pattern=?, strategy=?, target_provider=?, target_model=?, access_control=?, route_type=?, cache_exact_ttl=?, cache_semantic_ttl=?, cache_semantic_threshold=?, is_active=? WHERE id=?",
             )
             .bind(name.trim())
             .bind(&virtual_model)
@@ -362,13 +383,17 @@ impl RouteStore for SqliteRouteStore {
             .bind(target_provider.trim())
             .bind(target_model.trim())
             .bind(access_control)
+            .bind(route_type)
+            .bind(cache_exact_ttl)
+            .bind(cache_semantic_ttl)
+            .bind(cache_semantic_threshold)
             .bind(is_active)
             .bind(id)
             .execute(&self.pool)
             .await?;
         } else {
             sqlx::query(
-                "UPDATE routes SET name=?, virtual_model=?, strategy=?, target_provider=?, target_model=?, access_control=?, is_active=? WHERE id=?",
+                "UPDATE routes SET name=?, virtual_model=?, strategy=?, target_provider=?, target_model=?, access_control=?, route_type=?, cache_exact_ttl=?, cache_semantic_ttl=?, cache_semantic_threshold=?, is_active=? WHERE id=?",
             )
             .bind(name.trim())
             .bind(&virtual_model)
@@ -376,6 +401,10 @@ impl RouteStore for SqliteRouteStore {
             .bind(target_provider.trim())
             .bind(target_model.trim())
             .bind(access_control)
+            .bind(route_type)
+            .bind(cache_exact_ttl)
+            .bind(cache_semantic_ttl)
+            .bind(cache_semantic_threshold)
             .bind(is_active)
             .bind(id)
             .execute(&self.pool)
@@ -456,6 +485,10 @@ impl RouteSnapshotStore for SqliteRouteStore {
                 COALESCE(strategy, 'weighted') AS strategy,
                 target_provider, target_model,
                 COALESCE(access_control, 0) AS access_control,
+                COALESCE(route_type, 'chat') AS route_type,
+                cache_exact_ttl,
+                cache_semantic_ttl,
+                cache_semantic_threshold,
                 is_active,
                 created_at
             FROM routes

@@ -6,7 +6,9 @@ use clap::Parser;
 use axum::http::{HeaderValue, Method, header};
 use nyro_core::{
     Gateway,
-    cache::{CacheBackendKind, CacheConfig, CacheMode, CacheType},
+    cache::{
+        CacheConfig, CacheStorageKind, ExactCacheConfig, SemanticCacheConfig, VectorStorageKind,
+    },
     config::{
         GatewayConfig, GatewayStorageConfig, SqlStorageConfig, SqliteStorageConfig,
         StorageBackendKind,
@@ -98,19 +100,28 @@ struct Args {
     config_file: Option<String>,
 
     #[arg(long, default_value_t = false)]
-    cache_enabled: bool,
-    #[arg(long, default_value = "response")]
-    cache_type: String,
-    #[arg(long, default_value = "in_memory")]
-    cache_backend: String,
+    cache_exact_enabled: bool,
+    #[arg(long, default_value = "memory")]
+    cache_exact_storage: String,
     #[arg(long, default_value_t = 3600)]
-    cache_ttl_secs: u64,
+    cache_exact_ttl: u64,
     #[arg(long, default_value_t = 1000)]
-    cache_max_entries: usize,
-    #[arg(long)]
-    cache_namespace: Option<String>,
-    #[arg(long, default_value = "default_on")]
-    cache_mode: String,
+    cache_exact_max_entries: usize,
+
+    #[arg(long, default_value_t = false)]
+    cache_semantic_enabled: bool,
+    #[arg(long, default_value = "memory")]
+    cache_semantic_storage: String,
+    #[arg(long, default_value = "")]
+    cache_semantic_route: String,
+    #[arg(long, default_value_t = 0.92)]
+    cache_semantic_threshold: f64,
+    #[arg(long, default_value_t = 1536)]
+    cache_semantic_dimensions: usize,
+    #[arg(long, default_value_t = 600)]
+    cache_semantic_ttl: u64,
+    #[arg(long, default_value_t = 500)]
+    cache_semantic_max_entries: usize,
 }
 
 #[tokio::main]
@@ -169,11 +180,7 @@ async fn run_standalone(config_path: &str, args: &Args) -> anyhow::Result<()> {
         proxy_cors_origins,
         data_dir: PathBuf::from(data_dir),
         storage: GatewayStorageConfig::default(),
-        cache: if args.cache_enabled {
-            build_cache_config_from_args(args)?
-        } else {
-            yaml.cache.to_cache_config()
-        },
+        cache: yaml.cache.to_cache_config(),
         ..Default::default()
     };
 
@@ -262,31 +269,36 @@ async fn run_full(args: &Args) -> anyhow::Result<()> {
 }
 
 fn build_cache_config_from_args(args: &Args) -> anyhow::Result<CacheConfig> {
-    let cache_type = match args.cache_type.trim().to_ascii_lowercase().as_str() {
-        "semantic" => CacheType::Semantic,
-        "response" => CacheType::Response,
-        other => anyhow::bail!("unsupported cache type: {other}"),
+    let exact_storage = match args.cache_exact_storage.trim().to_ascii_lowercase().as_str() {
+        "memory" | "in_memory" | "inmemory" => CacheStorageKind::Memory,
+        "database" => CacheStorageKind::Database,
+        other => anyhow::bail!("unsupported exact cache storage: {other}"),
     };
-    let backend = match args.cache_backend.trim().to_ascii_lowercase().as_str() {
-        "database" => CacheBackendKind::Database,
-        "in_memory" | "inmemory" => CacheBackendKind::InMemory,
-        other => anyhow::bail!("unsupported cache backend: {other}"),
-    };
-    let mode = match args.cache_mode.trim().to_ascii_lowercase().as_str() {
-        "default_off" => CacheMode::DefaultOff,
-        "default_on" => CacheMode::DefaultOn,
-        other => anyhow::bail!("unsupported cache mode: {other}"),
+    let semantic_storage = match args
+        .cache_semantic_storage
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "memory" => VectorStorageKind::Memory,
+        other => anyhow::bail!("unsupported semantic cache storage: {other}"),
     };
     Ok(CacheConfig {
-        enabled: args.cache_enabled,
-        cache_type,
-        backend,
-        default_ttl: Duration::from_secs(args.cache_ttl_secs.max(1)),
-        max_entries: args.cache_max_entries.max(1),
-        namespace: args.cache_namespace.clone(),
-        mode,
-        cache_streaming: true,
-        semantic: None,
+        exact: ExactCacheConfig {
+            enabled: args.cache_exact_enabled,
+            storage: exact_storage,
+            default_ttl: Duration::from_secs(args.cache_exact_ttl.max(1)),
+            max_entries: args.cache_exact_max_entries.max(1),
+        },
+        semantic: SemanticCacheConfig {
+            enabled: args.cache_semantic_enabled,
+            storage: semantic_storage,
+            embedding_route: args.cache_semantic_route.trim().to_string(),
+            similarity_threshold: args.cache_semantic_threshold,
+            vector_dimensions: args.cache_semantic_dimensions.max(1),
+            default_ttl: Duration::from_secs(args.cache_semantic_ttl.max(1)),
+            max_entries: args.cache_semantic_max_entries.max(1),
+        },
     })
 }
 

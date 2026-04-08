@@ -41,6 +41,10 @@ pub async fn migrate(pool: &SqlitePool) -> anyhow::Result<()> {
     ensure_route_column(pool, "virtual_model", "TEXT").await?;
     ensure_route_column(pool, "strategy", "TEXT DEFAULT 'weighted'").await?;
     ensure_route_column(pool, "access_control", "INTEGER DEFAULT 0").await?;
+    ensure_route_column(pool, "route_type", "TEXT DEFAULT 'chat'").await?;
+    ensure_route_column(pool, "cache_exact_ttl", "INTEGER").await?;
+    ensure_route_column(pool, "cache_semantic_ttl", "INTEGER").await?;
+    ensure_route_column(pool, "cache_semantic_threshold", "REAL").await?;
     ensure_request_log_column(pool, "api_key_id", "TEXT").await?;
     ensure_api_key_tables(pool).await?;
     ensure_api_key_column(pool, "rpd", "INTEGER").await?;
@@ -235,6 +239,30 @@ async fn backfill_route_fields(pool: &SqlitePool) -> anyhow::Result<()> {
         .execute(pool)
         .await?;
     }
+    if column_exists(pool, "routes", "route_type").await? {
+        sqlx::query(
+            "UPDATE routes SET route_type = 'chat' WHERE route_type IS NULL OR trim(route_type) = ''",
+        )
+        .execute(pool)
+        .await?;
+    }
+    if column_exists(pool, "routes", "cache_ttl").await? {
+        sqlx::query(
+            "UPDATE routes SET cache_exact_ttl = cache_ttl WHERE cache_exact_ttl IS NULL AND cache_ttl IS NOT NULL",
+        )
+        .execute(pool)
+        .await?;
+    }
+    if column_exists(pool, "routes", "cache_enabled").await? {
+        sqlx::query(
+            "UPDATE routes SET cache_exact_ttl = 3600 WHERE cache_enabled = 1 AND cache_exact_ttl IS NULL",
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query("UPDATE routes SET cache_exact_ttl = NULL WHERE cache_enabled = 0")
+            .execute(pool)
+            .await?;
+    }
 
     Ok(())
 }
@@ -293,8 +321,12 @@ CREATE TABLE IF NOT EXISTS routes (
     name              TEXT NOT NULL,
     virtual_model     TEXT,
     strategy          TEXT DEFAULT 'weighted',
+    route_type        TEXT DEFAULT 'chat',
     target_provider   TEXT NOT NULL REFERENCES providers(id),
     target_model      TEXT NOT NULL,
+    cache_exact_ttl   INTEGER,
+    cache_semantic_ttl INTEGER,
+    cache_semantic_threshold REAL,
     access_control    INTEGER DEFAULT 0,
     is_active         INTEGER DEFAULT 1,
     priority          INTEGER DEFAULT 0,

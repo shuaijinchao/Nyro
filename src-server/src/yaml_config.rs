@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::time::Duration;
-use nyro_core::cache::{CacheBackendKind, CacheConfig, CacheMode, CacheType};
+use nyro_core::cache::{
+    CacheConfig, CacheStorageKind, ExactCacheConfig, SemanticCacheConfig, VectorStorageKind,
+};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -20,19 +22,39 @@ pub struct YamlConfig {
 #[derive(Debug, Deserialize, Default)]
 pub struct YamlCacheConfig {
     #[serde(default)]
+    pub exact: YamlExactCacheConfig,
+    #[serde(default)]
+    pub semantic: YamlSemanticCacheConfig,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct YamlExactCacheConfig {
+    #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
-    pub cache_type: Option<String>,
+    pub storage: Option<String>,
     #[serde(default)]
-    pub backend: Option<String>,
-    #[serde(default)]
-    pub default_ttl_secs: Option<u64>,
+    pub default_ttl: Option<u64>,
     #[serde(default)]
     pub max_entries: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct YamlSemanticCacheConfig {
     #[serde(default)]
-    pub namespace: Option<String>,
+    pub enabled: bool,
     #[serde(default)]
-    pub mode: Option<String>,
+    pub storage: Option<String>,
+    #[serde(default)]
+    pub embedding_route: Option<String>,
+    #[serde(default)]
+    pub similarity_threshold: Option<f64>,
+    #[serde(default)]
+    pub vector_dimensions: Option<usize>,
+    #[serde(default)]
+    pub default_ttl: Option<u64>,
+    #[serde(default)]
+    pub max_entries: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -81,9 +103,12 @@ pub struct YamlEndpoint {
 #[derive(Debug, Deserialize)]
 pub struct YamlRoute {
     pub name: String,
+    #[serde(alias = "vmodel")]
     pub virtual_model: String,
     #[serde(default = "default_strategy")]
     pub strategy: String,
+    #[serde(default = "default_route_type", alias = "type")]
+    pub route_type: String,
     pub targets: Vec<YamlRouteTarget>,
     #[serde(default)]
     pub access_control: bool,
@@ -91,6 +116,10 @@ pub struct YamlRoute {
 
 fn default_strategy() -> String {
     "weighted".to_string()
+}
+
+fn default_route_type() -> String {
+    "chat".to_string()
 }
 
 #[derive(Debug, Deserialize)]
@@ -147,6 +176,13 @@ impl YamlConfig {
             if r.targets.is_empty() {
                 anyhow::bail!("routes[{i}] ({}): at least one target is required", r.name);
             }
+            parse_route_type(&r.route_type).map_err(|_| {
+                anyhow::anyhow!(
+                    "routes[{i}] ({}): unsupported route type '{}', expected chat|embedding",
+                    r.name,
+                    r.route_type
+                )
+            })?;
             for (j, t) in r.targets.iter().enumerate() {
                 if !provider_names.contains(&t.provider.as_str()) {
                     anyhow::bail!(
@@ -163,49 +199,46 @@ impl YamlConfig {
 
 impl YamlCacheConfig {
     pub fn to_cache_config(&self) -> CacheConfig {
-        let cache_type = match self
-            .cache_type
+        let exact_storage = match self
+            .exact
+            .storage
             .as_deref()
-            .unwrap_or("response")
+            .unwrap_or("memory")
             .trim()
             .to_ascii_lowercase()
             .as_str()
         {
-            "semantic" => CacheType::Semantic,
-            _ => CacheType::Response,
+            "database" => CacheStorageKind::Database,
+            "in_memory" | "inmemory" => CacheStorageKind::Memory,
+            _ => CacheStorageKind::Memory,
         };
-        let backend = match self
-            .backend
+        let semantic_storage = match self
+            .semantic
+            .storage
             .as_deref()
-            .unwrap_or("in_memory")
+            .unwrap_or("memory")
             .trim()
             .to_ascii_lowercase()
             .as_str()
         {
-            "database" => CacheBackendKind::Database,
-            _ => CacheBackendKind::InMemory,
-        };
-        let mode = match self
-            .mode
-            .as_deref()
-            .unwrap_or("default_on")
-            .trim()
-            .to_ascii_lowercase()
-            .as_str()
-        {
-            "default_off" => CacheMode::DefaultOff,
-            _ => CacheMode::DefaultOn,
+            _ => VectorStorageKind::Memory,
         };
         CacheConfig {
-            enabled: self.enabled,
-            cache_type,
-            backend,
-            default_ttl: Duration::from_secs(self.default_ttl_secs.unwrap_or(3600)),
-            max_entries: self.max_entries.unwrap_or(1000),
-            namespace: self.namespace.clone(),
-            mode,
-            cache_streaming: true,
-            semantic: None,
+            exact: ExactCacheConfig {
+                enabled: self.exact.enabled,
+                storage: exact_storage,
+                default_ttl: Duration::from_secs(self.exact.default_ttl.unwrap_or(3600)),
+                max_entries: self.exact.max_entries.unwrap_or(1000),
+            },
+            semantic: SemanticCacheConfig {
+                enabled: self.semantic.enabled,
+                storage: semantic_storage,
+                embedding_route: self.semantic.embedding_route.clone().unwrap_or_default(),
+                similarity_threshold: self.semantic.similarity_threshold.unwrap_or(0.92),
+                vector_dimensions: self.semantic.vector_dimensions.unwrap_or(1536),
+                default_ttl: Duration::from_secs(self.semantic.default_ttl.unwrap_or(600)),
+                max_entries: self.semantic.max_entries.unwrap_or(500),
+            },
         }
     }
 }
@@ -299,13 +332,23 @@ pub fn build_routes(yaml: &YamlConfig, providers: &[Provider]) -> Vec<Route> {
                 target_provider: primary.map(|t| t.provider_id.clone()).unwrap_or_default(),
                 target_model: primary.map(|t| t.model.clone()).unwrap_or_default(),
                 access_control: yr.access_control,
-                route_type: "chat".to_string(),
-                cache_enabled: None,
-                cache_ttl: None,
+                route_type: parse_route_type(&yr.route_type).unwrap_or("chat").to_string(),
+                cache_exact_ttl: None,
+                cache_semantic_ttl: None,
+                cache_semantic_threshold: None,
+                cache: None,
                 is_active: true,
                 created_at: now,
                 targets,
             }
         })
         .collect()
+}
+
+fn parse_route_type(raw: &str) -> anyhow::Result<&'static str> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "chat" => Ok("chat"),
+        "embedding" => Ok("embedding"),
+        _ => anyhow::bail!("unsupported route type"),
+    }
 }

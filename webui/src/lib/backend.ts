@@ -121,6 +121,13 @@ function resolveHTTP(cmd: string, args?: Record<string, unknown>): HTTPMapping {
 
     case "get_cache_settings":
       return { method: "GET", url: `${base}/cache/settings` };
+    case "update_cache_settings":
+      return { method: "PUT", url: `${base}/cache/settings`, body: args?.input as Record<string, unknown> };
+    case "detect_embedding_dimensions":
+      return {
+        method: "GET",
+        url: `${base}/cache/embedding-dimensions?embedding_route=${encodeURIComponent(String(args?.embeddingRoute ?? ""))}`,
+      };
     case "flush_cache":
       return { method: "POST", url: `${base}/cache/flush` };
     case "delete_cache_key":

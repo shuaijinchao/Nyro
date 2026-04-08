@@ -11,7 +11,6 @@ import {
   ChevronLeft,
   Settings,
   MessageSquarePlus,
-  Database,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useLocale } from "@/lib/i18n";
@@ -27,7 +26,6 @@ const NAV_ITEMS = [
   { type: "divider" as const },
   { label: "Logs", path: "/logs", icon: ScrollText },
   { label: "Stats", path: "/stats", icon: BarChart3 },
-  { label: "Cache", path: "/cache", icon: Database },
   { type: "divider" as const },
   { label: "Settings", path: "/settings", icon: Settings },
   {
@@ -136,8 +134,6 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                             ? "日志"
                             : label === "Stats"
                               ? "统计"
-                              : label === "Cache"
-                                ? "缓存"
                               : "系统设置"
                     : label}
                 </span>

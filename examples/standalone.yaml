@@ -31,9 +31,17 @@ providers:
 routes:
   - name: gpt-4o
     virtual_model: gpt-4o
+    type: chat
     targets:
       - provider: openai
         model: gpt-4o
+
+  - name: text-embedding-3-small
+    vmodel: text-embedding-3-small
+    type: embedding
+    targets:
+      - provider: openai
+        model: text-embedding-3-small
 
   - name: claude-sonnet
     virtual_model: claude-sonnet-4-20250514

@@ -50,8 +50,6 @@ fn build_proxy_cors_layer(origins: &[String], proxy_port: u16) -> CorsLayer {
             header::CONTENT_TYPE,
             header::ACCEPT,
             header::HeaderName::from_static("x-api-key"),
-            header::HeaderName::from_static("x-nyro-cache"),
-            header::HeaderName::from_static("x-nyro-cache-ttl"),
             header::HeaderName::from_static("anthropic-version"),
         ])
 }

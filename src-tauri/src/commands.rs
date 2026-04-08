@@ -223,6 +223,28 @@ pub async fn get_cache_settings(gw: State<'_, Gateway>) -> Result<serde_json::Va
 }
 
 #[tauri::command]
+pub async fn update_cache_settings(
+    gw: State<'_, Gateway>,
+    input: serde_json::Value,
+) -> Result<(), String> {
+    gw.admin()
+        .update_cache_settings(input)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn detect_embedding_dimensions(
+    gw: State<'_, Gateway>,
+    embedding_route: String,
+) -> Result<u64, String> {
+    gw.admin()
+        .detect_embedding_dimensions(&embedding_route)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn flush_cache(gw: State<'_, Gateway>) -> Result<(), String> {
     gw.admin().flush_cache().await.map_err(|e| e.to_string())
 }

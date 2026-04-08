@@ -86,6 +86,8 @@ pub fn run() {
             commands::get_setting,
             commands::set_setting,
             commands::get_cache_settings,
+            commands::update_cache_settings,
+            commands::detect_embedding_dimensions,
             commands::flush_cache,
             commands::delete_cache_key,
             commands::get_cache_stats,
