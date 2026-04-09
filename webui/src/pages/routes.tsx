@@ -683,19 +683,19 @@ export default function RoutesPage() {
             {createForm.route_type !== "embedding" && (
               <>
                 <RouteToggleControl
-                  title={isZh ? "精确缓存" : "Exact Cache"}
+                  title={isZh ? "精确匹配缓存" : "Exact Cache"}
                   isZh={isZh}
                   checked={createForm.cache_exact_enabled}
                   disabled={!globalExactCacheEnabled}
-                  disabledMessage={isZh ? "请在系统设置中开启全局精确缓存" : "Enable global exact cache in settings first"}
+                  disabledMessage={isZh ? "请在系统设置中开启全局精确匹配缓存" : "Enable global exact cache in settings first"}
                   onCheckedChange={(checked) => setCreateForm((prev) => ({ ...prev, cache_exact_enabled: checked }))}
                 />
                 <RouteToggleControl
-                  title={isZh ? "向量缓存" : "Semantic Cache"}
+                  title={isZh ? "语义相似缓存" : "Semantic Cache"}
                   isZh={isZh}
                   checked={createForm.cache_semantic_enabled}
                   disabled={!globalSemanticCacheEnabled}
-                  disabledMessage={isZh ? "请在系统设置中开启全局向量缓存" : "Enable global semantic cache in settings first"}
+                  disabledMessage={isZh ? "请在系统设置中开启全局语义相似缓存" : "Enable global semantic cache in settings first"}
                   onCheckedChange={(checked) => {
                     if (!globalSemanticCacheEnabled) return;
                     updateCreateSemanticEnabled(checked);
@@ -703,7 +703,7 @@ export default function RoutesPage() {
                 />
                 {globalSemanticCacheEnabled && createForm.cache_semantic_enabled && (
                   <div className="space-y-2">
-                    <FieldLabel>{isZh ? "语义相似度" : "Semantic Similarity"}</FieldLabel>
+                    <FieldLabel>{isZh ? "语义相似度" : "Semantic Threshold"}</FieldLabel>
                     <Input
                       type="number"
                       step="0.01"
@@ -887,21 +887,21 @@ export default function RoutesPage() {
                     {editForm.route_type !== "embedding" && (
                       <>
                         <RouteToggleControl
-                          title={isZh ? "精确缓存" : "Exact Cache"}
+                          title={isZh ? "精确匹配缓存" : "Exact Cache"}
                           isZh={isZh}
                           checked={editForm.cache_exact_enabled}
                           disabled={!globalExactCacheEnabled}
-                          disabledMessage={isZh ? "请在系统设置中开启全局精确缓存" : "Enable global exact cache in settings first"}
+                          disabledMessage={isZh ? "请在系统设置中开启全局精确匹配缓存" : "Enable global exact cache in settings first"}
                           onCheckedChange={(checked) =>
                             setEditForm((prev) => (prev ? { ...prev, cache_exact_enabled: checked } : prev))
                           }
                         />
                         <RouteToggleControl
-                          title={isZh ? "向量缓存" : "Semantic Cache"}
+                          title={isZh ? "语义相似缓存" : "Semantic Cache"}
                           isZh={isZh}
                           checked={editForm.cache_semantic_enabled}
                           disabled={!globalSemanticCacheEnabled}
-                          disabledMessage={isZh ? "请在系统设置中开启全局向量缓存" : "Enable global semantic cache in settings first"}
+                          disabledMessage={isZh ? "请在系统设置中开启全局语义相似缓存" : "Enable global semantic cache in settings first"}
                           onCheckedChange={(checked) => {
                             if (!globalSemanticCacheEnabled) return;
                             updateEditSemanticEnabled(checked);
@@ -909,7 +909,7 @@ export default function RoutesPage() {
                         />
                         {globalSemanticCacheEnabled && editForm.cache_semantic_enabled && (
                           <div className="space-y-2">
-                            <FieldLabel>{isZh ? "语义相似度" : "Semantic Similarity"}</FieldLabel>
+                            <FieldLabel>{isZh ? "语义相似度" : "Semantic Threshold"}</FieldLabel>
                             <Input
                               type="number"
                               step="0.01"
@@ -998,12 +998,12 @@ export default function RoutesPage() {
                     )}
                     {route.cache?.exact && (
                       <Badge variant="success" className="connect-label-badge">
-                        {isZh ? "精确缓存" : "Exact"}
+                        {isZh ? "精确匹配缓存" : "Exact Cache"}
                       </Badge>
                     )}
                     {route.cache?.semantic && (
                       <Badge variant="success" className="connect-label-badge">
-                        {isZh ? "语义缓存" : "Semantic"}
+                        {isZh ? "语义相似缓存" : "Semantic Cache"}
                       </Badge>
                     )}
                     {!route.is_active && (

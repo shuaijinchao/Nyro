@@ -1393,7 +1393,7 @@ Step 5: 显示 base_url
 - [ ] Fallback 重试（非流式）
 - [ ] 限流/熔断
 - [ ] 多模态完整支持（图像/PDF）
-- [ ] 语义缓存
+- [ ] 语义相似缓存
 - [ ] WebSocket 实时日志推送（替代轮询）
 - [ ] Docker 镜像（Server 版）
 

@@ -171,7 +171,7 @@ export default function SettingsPage() {
     },
     onError: (error: unknown) => {
       setCacheToggleDialog(null);
-      showErrorDialog("保存精确缓存设置失败", "Failed to save exact cache settings", error);
+      showErrorDialog("保存精确匹配缓存设置失败", "Failed to save exact cache settings", error);
     },
   });
   const saveSemanticCacheToggle = useMutation({
@@ -181,7 +181,7 @@ export default function SettingsPage() {
     },
     onError: (error: unknown) => {
       setCacheToggleDialog(null);
-      showErrorDialog("保存语义缓存设置失败", "Failed to save semantic cache settings", error);
+      showErrorDialog("保存语义相似缓存设置失败", "Failed to save semantic cache settings", error);
     },
   });
   const detectEmbeddingDimensionsMut = useMutation({
@@ -391,7 +391,7 @@ export default function SettingsPage() {
         <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
           <div className="rounded-xl bg-slate-50 p-4 space-y-3">
             <div className="flex items-center justify-between">
-              <p className="text-sm font-medium text-slate-700">{isZh ? "精确缓存" : "Exact Cache"}</p>
+              <p className="text-sm font-medium text-slate-700">{isZh ? "精确匹配缓存" : "Exact Cache"}</p>
               <Switch
                 checked={cacheForm.exact.enabled}
                 disabled={saveExactCacheToggle.isPending}
@@ -447,7 +447,7 @@ export default function SettingsPage() {
 
           <div className="rounded-xl bg-slate-50 p-4 space-y-3">
             <div className="flex items-center justify-between">
-              <p className="text-sm font-medium text-slate-700">{isZh ? "语义缓存" : "Semantic Cache"}</p>
+              <p className="text-sm font-medium text-slate-700">{isZh ? "语义相似缓存" : "Semantic Cache"}</p>
               <Switch
                 checked={cacheForm.semantic.enabled}
                 disabled={saveSemanticCacheToggle.isPending}
@@ -714,19 +714,19 @@ export default function SettingsPage() {
         }}
         title={
           cacheToggleDialog?.kind === "exact"
-            ? (isZh ? "确认启用精确缓存" : "Enable Exact Cache")
+            ? (isZh ? "确认启用精确匹配缓存" : "Enable Exact Cache")
             : cacheToggleDialog?.kind === "semantic"
-              ? (isZh ? "确认启用语义缓存" : "Enable Semantic Cache")
-              : (isZh ? "无法启用语义缓存" : "Cannot Enable Semantic Cache")
+              ? (isZh ? "确认启用语义相似缓存" : "Enable Semantic Cache")
+              : (isZh ? "无法启用语义相似缓存" : "Cannot Enable Semantic Cache")
         }
         description={
           cacheToggleDialog?.kind === "semantic_missing_route"
             ? (isZh
-              ? "请先在“Embedding 路由（必选）”中选择一条向量路由，然后再启用语义缓存。"
+              ? "请先在“Embedding 路由（必选）”中选择一条向量路由，然后再启用语义相似缓存。"
               : "Please select an embedding route before enabling semantic cache.")
             : cacheToggleDialog?.kind === "exact"
-              ? (isZh ? "确认后将立即保存并启用精确缓存。" : "This will save and enable exact cache immediately.")
-              : (isZh ? "确认后将立即保存并启用语义缓存。" : "This will save and enable semantic cache immediately.")
+              ? (isZh ? "确认后将立即保存并启用精确匹配缓存。" : "This will save and enable exact cache immediately.")
+              : (isZh ? "确认后将立即保存并启用语义相似缓存。" : "This will save and enable semantic cache immediately.")
         }
         hideCancel={cacheToggleDialog?.kind === "semantic_missing_route"}
         cancelText={isZh ? "取消" : "Cancel"}
