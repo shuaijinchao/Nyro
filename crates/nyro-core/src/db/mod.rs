@@ -261,7 +261,7 @@ pub async fn recreate_vec0_table(pool: &SqlitePool, vector_dimensions: usize) ->
             partition TEXT partition key,
             cache_key TEXT,
             dimensions INTEGER,
-            embedding float[{dimensions}],
+            embedding float[{dimensions}] distance_metric=cosine,
             +data BLOB,
             created_at INTEGER
         )"#
