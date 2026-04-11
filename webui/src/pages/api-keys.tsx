@@ -60,6 +60,28 @@ function formatExpiresText(value: string | null | undefined, isZh: boolean) {
   return value.replace("T", " ").slice(0, 19);
 }
 
+function isApiKeyExpired(expiresAt: string | null | undefined) {
+  if (!expiresAt) return false;
+  const normalized = expiresAt.includes("T") ? expiresAt : expiresAt.replace(" ", "T");
+  const utcMillis = Date.parse(normalized.endsWith("Z") ? normalized : `${normalized}Z`);
+  if (!Number.isNaN(utcMillis)) {
+    return utcMillis <= Date.now();
+  }
+  const fallbackMillis = Date.parse(expiresAt);
+  return !Number.isNaN(fallbackMillis) && fallbackMillis <= Date.now();
+}
+
+function formatAdminStatusLabel(status: string, isZh: boolean) {
+  const normalized = status.trim().toLowerCase();
+  if (normalized === "active") return isZh ? "正常" : "Active";
+  if (normalized === "revoked") return isZh ? "吊销" : "Revoked";
+  return status;
+}
+
+function formatValidityLabel(expired: boolean, isZh: boolean) {
+  return expired ? (isZh ? "过期" : "Expired") : (isZh ? "有效" : "Valid");
+}
+
 function resolveExpiresAt(preset: ExpirePreset) {
   if (preset === "never") return undefined;
   const now = Date.now();
@@ -400,6 +422,7 @@ export default function ApiKeysPage() {
         <div className="grid gap-3">
           {pagedApiKeys.map((item) => {
             const isEditing = editingId === item.id && editForm;
+            const keyExpired = isApiKeyExpired(item.expires_at);
             if (isEditing && editForm) {
               return (
                 <div key={item.id} className="glass rounded-2xl p-5 space-y-4">
@@ -585,7 +608,10 @@ export default function ApiKeysPage() {
                         {shortApiKeyTag(item.key)}
                       </code>
                       <Badge variant={item.status === "active" ? "success" : "danger"} className="connect-label-badge">
-                        {item.status}
+                        {formatAdminStatusLabel(item.status, isZh)}
+                      </Badge>
+                      <Badge variant={keyExpired ? "danger" : "success"} className="connect-label-badge">
+                        {formatValidityLabel(keyExpired, isZh)}
                       </Badge>
                       {item.route_ids.length > 0 && (
                         <Badge variant="warning" className="connect-label-badge bg-cyan-50 text-cyan-700">
