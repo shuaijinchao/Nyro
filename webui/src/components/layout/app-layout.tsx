@@ -59,7 +59,7 @@ export function AppLayout() {
   }
 
   async function openProjectGithub() {
-    await openExternalUrl("https://github.com/NYRO-WAY/NYRO");
+    await openExternalUrl("https://github.com/nyroway/nyro");
   }
 
   async function handleSurfaceMouseDown(e: React.MouseEvent<HTMLElement>) {

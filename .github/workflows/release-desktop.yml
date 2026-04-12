@@ -189,7 +189,7 @@ jobs:
           LINUX_ARM_SHA="$(sha256sum "$LINUX_ARM_ASSET" | awk '{print $1}')"
           LINUX_INTEL_SHA="$(sha256sum "$LINUX_INTEL_ASSET" | awk '{print $1}')"
 
-          git clone https://x-access-token:${GH_TOKEN}@github.com/NYRO-WAY/homebrew-nyro.git /tmp/homebrew-nyro
+          git clone https://x-access-token:${GH_TOKEN}@github.com/nyroway/homebrew-nyro.git /tmp/homebrew-nyro
           cd /tmp/homebrew-nyro
           VERSION="$VERSION" \
           MAC_ARM_SHA="$MAC_ARM_SHA" \

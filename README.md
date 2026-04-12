@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/NYRO-WAY/NYRO/releases/latest"><img src="https://img.shields.io/github/v/release/NYRO-WAY/NYRO" alt="Release"></a>
+  <a href="https://github.com/nyroway/nyro/releases/latest"><img src="https://img.shields.io/github/v/release/nyroway/nyro" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
   <a href="README_CN.md"><img src="https://img.shields.io/badge/文档-中文-8A2BE2" alt="中文"></a>
 </p>
@@ -153,7 +153,7 @@ Nyro detects installed tools, generates the correct configuration for the select
 **Homebrew (macOS / Linux)**
 
 ```bash
-brew tap nyro-way/nyro
+brew tap nyroway/nyro
 brew install --cask nyro
 ```
 
@@ -161,15 +161,15 @@ brew install --cask nyro
 
 ```bash
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/NYRO-WAY/NYRO/master/scripts/install/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/nyroway/nyro/master/scripts/install/install.sh | bash
 
 # Windows (PowerShell)
-irm https://raw.githubusercontent.com/NYRO-WAY/NYRO/master/scripts/install/install.ps1 | iex
+irm https://raw.githubusercontent.com/nyroway/nyro/master/scripts/install/install.ps1 | iex
 ```
 
 **Manual Download**
 
-Download the latest installer for your platform from [GitHub Releases](https://github.com/NYRO-WAY/NYRO/releases/latest).
+Download the latest installer for your platform from [GitHub Releases](https://github.com/nyroway/nyro/releases/latest).
 
 > **macOS**: After manual install run `sudo xattr -rd com.apple.quarantine /Applications/Nyro.app`, or use the install script which handles this automatically.
 >
@@ -179,7 +179,7 @@ Download the latest installer for your platform from [GitHub Releases](https://g
 
 ```bash
 # Download
-curl -LO https://github.com/NYRO-WAY/NYRO/releases/latest/download/nyro-server-linux-x86_64
+curl -LO https://github.com/nyroway/nyro/releases/latest/download/nyro-server-linux-x86_64
 chmod +x nyro-server-linux-x86_64
 
 # Start (localhost only, no auth required)
