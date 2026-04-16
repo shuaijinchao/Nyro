@@ -2,7 +2,7 @@
   {
     "id": "custom",
     "label": {
-      "zh": "自定义",
+      "zh": "\u81ea\u5b9a\u4e49",
       "en": "Custom"
     },
     "icon": "nyro",
@@ -11,7 +11,7 @@
       {
         "id": "default",
         "label": {
-          "zh": "默认",
+          "zh": "\u9ed8\u8ba4",
           "en": "Default"
         },
         "capabilitiesSource": "ai://models.dev/",
@@ -31,7 +31,7 @@
       {
         "id": "default",
         "label": {
-          "zh": "默认",
+          "zh": "\u9ed8\u8ba4",
           "en": "Default"
         },
         "baseUrls": {
@@ -52,7 +52,20 @@
         },
         "modelsSource": "https://chatgpt.com/backend-api/codex/models",
         "capabilitiesSource": "ai://models.dev/openai",
-        "auth_mode": "oauth"
+        "auth_mode": "oauth",
+        "oauth": {
+          "authBaseUrl": "https://auth.openai.com",
+          "authorizeUrl": "https://auth.openai.com/oauth/authorize",
+          "tokenUrl": "https://auth.openai.com/oauth/token",
+          "clientId": "app_EMoamEEZ73f0CkXaXp7hrann",
+          "redirectUri": "http://localhost:1455/auth/callback",
+          "scope": "openid profile email offline_access"
+        },
+        "runtime": {
+          "apiBaseUrl": "https://chatgpt.com/backend-api/codex",
+          "modelsUrl": "https://chatgpt.com/backend-api/codex/models",
+          "modelsClientVersion": "0.99.0"
+        }
       }
     ]
   },
@@ -68,7 +81,7 @@
       {
         "id": "default",
         "label": {
-          "zh": "默认",
+          "zh": "\u9ed8\u8ba4",
           "en": "Default"
         },
         "baseUrls": {
@@ -92,7 +105,7 @@
       {
         "id": "default",
         "label": {
-          "zh": "默认",
+          "zh": "\u9ed8\u8ba4",
           "en": "Default"
         },
         "baseUrls": {
@@ -117,7 +130,7 @@
       {
         "id": "default",
         "label": {
-          "zh": "默认",
+          "zh": "\u9ed8\u8ba4",
           "en": "Default"
         },
         "baseUrls": {
@@ -141,7 +154,7 @@
       {
         "id": "default",
         "label": {
-          "zh": "默认",
+          "zh": "\u9ed8\u8ba4",
           "en": "Default"
         },
         "baseUrls": {
@@ -166,7 +179,7 @@
       {
         "id": "default",
         "label": {
-          "zh": "默认",
+          "zh": "\u9ed8\u8ba4",
           "en": "Default"
         },
         "baseUrls": {
@@ -180,7 +193,7 @@
       {
         "id": "china",
         "label": {
-          "zh": "中国站",
+          "zh": "\u4e2d\u56fd\u7ad9",
           "en": "China"
         },
         "baseUrls": {
@@ -205,7 +218,7 @@
       {
         "id": "default",
         "label": {
-          "zh": "默认",
+          "zh": "\u9ed8\u8ba4",
           "en": "Default"
         },
         "baseUrls": {
@@ -220,7 +233,7 @@
       {
         "id": "china",
         "label": {
-          "zh": "中国站",
+          "zh": "\u4e2d\u56fd\u7ad9",
           "en": "China"
         },
         "baseUrls": {
@@ -246,7 +259,7 @@
       {
         "id": "default",
         "label": {
-          "zh": "默认",
+          "zh": "\u9ed8\u8ba4",
           "en": "Default"
         },
         "baseUrls": {
@@ -285,7 +298,7 @@
       {
         "id": "default",
         "label": {
-          "zh": "默认",
+          "zh": "\u9ed8\u8ba4",
           "en": "Default"
         },
         "baseUrls": {
@@ -324,7 +337,7 @@
       {
         "id": "default",
         "label": {
-          "zh": "默认",
+          "zh": "\u9ed8\u8ba4",
           "en": "Default"
         },
         "baseUrls": {
@@ -348,7 +361,7 @@
       {
         "id": "default",
         "label": {
-          "zh": "默认",
+          "zh": "\u9ed8\u8ba4",
           "en": "Default"
         },
         "baseUrls": {
@@ -373,7 +386,7 @@
       {
         "id": "default",
         "label": {
-          "zh": "默认",
+          "zh": "\u9ed8\u8ba4",
           "en": "Default"
         },
         "baseUrls": {

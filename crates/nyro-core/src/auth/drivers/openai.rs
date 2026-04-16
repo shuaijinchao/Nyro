@@ -19,15 +19,52 @@ use crate::auth::types::{
 };
 use crate::db::models::Provider;
 
-const OPENAI_AUTH_BASE_URL: &str = "https://auth.openai.com";
-const OPENAI_AUTHORIZE_URL: &str = "https://auth.openai.com/oauth/authorize";
-const OPENAI_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
-const OPENAI_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
-const OPENAI_REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
-const OPENAI_SCOPE: &str = "openid profile email offline_access";
-const CODEX_API_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
-const CODEX_MODELS_URL: &str = "https://chatgpt.com/backend-api/codex/models";
-const CODEX_MODELS_CLIENT_VERSION: &str = "0.99.0";
+const PROVIDER_PRESETS_SNAPSHOT: &str = include_str!("../../../assets/providers.json");
+const OPENAI_PRESET_ID: &str = "openai";
+const CODEX_CHANNEL_ID: &str = "codex";
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenAIPresetSnapshot {
+    id: String,
+    #[serde(default)]
+    channels: Vec<OpenAIChannelSnapshot>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenAIChannelSnapshot {
+    id: String,
+    #[serde(default)]
+    oauth: Option<OpenAIOAuthConfig>,
+    #[serde(default)]
+    runtime: Option<OpenAIRuntimeConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenAIOAuthConfig {
+    auth_base_url: String,
+    authorize_url: String,
+    token_url: String,
+    client_id: String,
+    redirect_uri: String,
+    scope: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenAIRuntimeConfig {
+    api_base_url: String,
+    models_url: String,
+    models_client_version: String,
+}
+
+#[derive(Debug, Clone)]
+struct OpenAICodexConfig {
+    oauth: OpenAIOAuthConfig,
+    runtime: OpenAIRuntimeConfig,
+}
 
 #[derive(Debug, Default)]
 pub struct OpenAIOAuthDriver;
@@ -54,8 +91,37 @@ struct OpenAIAuthState {
 }
 
 impl OpenAIOAuthDriver {
-    fn normalize_token_response(body: &str, fallback_refresh_token: Option<&str>) -> Result<CredentialBundle> {
-        let token: OpenAITokenResponse = serde_json::from_str(body).context("parse openai oauth token response")?;
+    fn codex_config() -> Result<OpenAICodexConfig> {
+        let presets: Vec<OpenAIPresetSnapshot> = serde_json::from_str(PROVIDER_PRESETS_SNAPSHOT)
+            .context("parse provider presets snapshot for codex oauth")?;
+        let preset = presets
+            .into_iter()
+            .find(|item| item.id == OPENAI_PRESET_ID)
+            .ok_or_else(|| anyhow!("missing provider preset: {OPENAI_PRESET_ID}"))?;
+        let channel = preset
+            .channels
+            .into_iter()
+            .find(|item| item.id == CODEX_CHANNEL_ID)
+            .ok_or_else(|| {
+                anyhow!("missing provider channel: {OPENAI_PRESET_ID}/{CODEX_CHANNEL_ID}")
+            })?;
+        Ok(OpenAICodexConfig {
+            oauth: channel.oauth.ok_or_else(|| {
+                anyhow!("missing oauth config for {OPENAI_PRESET_ID}/{CODEX_CHANNEL_ID}")
+            })?,
+            runtime: channel.runtime.ok_or_else(|| {
+                anyhow!("missing runtime config for {OPENAI_PRESET_ID}/{CODEX_CHANNEL_ID}")
+            })?,
+        })
+    }
+
+    fn normalize_token_response(
+        body: &str,
+        fallback_refresh_token: Option<&str>,
+        runtime: &OpenAIRuntimeConfig,
+    ) -> Result<CredentialBundle> {
+        let token: OpenAITokenResponse =
+            serde_json::from_str(body).context("parse openai oauth token response")?;
         let access_token = token
             .access_token
             .filter(|value| !value.trim().is_empty())
@@ -69,7 +135,7 @@ impl OpenAIOAuthDriver {
                 .filter(|value| !value.trim().is_empty())
                 .or_else(|| fallback_refresh_token.map(ToString::to_string)),
             expires_at: Some(expires_at_after(expires_in)),
-            resource_url: Some(CODEX_API_BASE_URL.to_string()),
+            resource_url: Some(runtime.api_base_url.clone()),
             subject_id: None,
             scopes: encode_scopes(token.scope.as_deref()),
             raw: serde_json::from_str(body).unwrap_or(serde_json::Value::Null),
@@ -87,7 +153,9 @@ impl OpenAIOAuthDriver {
 
     fn decode_jwt_claims(token: &str) -> Option<Value> {
         let payload = token.split('.').nth(1)?;
-        let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload).ok()?;
+        let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(payload)
+            .ok()?;
         serde_json::from_slice(&decoded).ok()
     }
 
@@ -116,8 +184,11 @@ impl OpenAIOAuthDriver {
             })
     }
 
-    fn codex_models_source() -> String {
-        format!("{CODEX_MODELS_URL}?client_version={CODEX_MODELS_CLIENT_VERSION}")
+    fn codex_models_source(runtime: &OpenAIRuntimeConfig) -> String {
+        format!(
+            "{}?client_version={}",
+            runtime.models_url, runtime.models_client_version
+        )
     }
 }
 
@@ -134,17 +205,22 @@ impl AuthDriver for OpenAIOAuthDriver {
     }
 
     async fn start(&self, ctx: StartAuthContext) -> Result<CreateAuthSession> {
+        let config = Self::codex_config()?;
         let code_verifier = generate_code_verifier();
         let code_challenge = generate_code_challenge(&code_verifier);
         let state = generate_state();
-        let redirect_uri = ctx.redirect_uri.as_deref().filter(|v| !v.trim().is_empty()).unwrap_or(OPENAI_REDIRECT_URI);
+        let redirect_uri = ctx
+            .redirect_uri
+            .as_deref()
+            .filter(|v| !v.trim().is_empty())
+            .unwrap_or(config.oauth.redirect_uri.as_str());
         let auth_url = build_authorize_url(
-            OPENAI_AUTHORIZE_URL,
+            config.oauth.authorize_url.as_str(),
             &[
                 ("response_type", "code"),
-                ("client_id", OPENAI_CLIENT_ID),
+                ("client_id", config.oauth.client_id.as_str()),
                 ("redirect_uri", redirect_uri),
-                ("scope", OPENAI_SCOPE),
+                ("scope", config.oauth.scope.as_str()),
                 ("code_challenge", &code_challenge),
                 ("code_challenge_method", "S256"),
                 ("state", &state),
@@ -167,7 +243,7 @@ impl AuthDriver for OpenAIOAuthDriver {
             status: "pending".to_string(),
             use_proxy: ctx.use_proxy,
             user_code: None,
-            verification_uri: Some(OPENAI_AUTH_BASE_URL.to_string()),
+            verification_uri: Some(config.oauth.auth_base_url.clone()),
             verification_uri_complete: Some(auth_url),
             state_json: Some(session_state),
             context_json: None,
@@ -178,7 +254,13 @@ impl AuthDriver for OpenAIOAuthDriver {
         })
     }
 
-    async fn exchange(&self, session: &AuthSession, input: AuthExchangeInput, ctx: ExchangeAuthContext) -> Result<CredentialBundle> {
+    async fn exchange(
+        &self,
+        session: &AuthSession,
+        input: AuthExchangeInput,
+        ctx: ExchangeAuthContext,
+    ) -> Result<CredentialBundle> {
+        let config = Self::codex_config()?;
         let state: OpenAIAuthState = parse_session_state(session)?;
         let callback = parse_oauth_callback(&input)?;
         validate_callback_state(&state.pkce.state, callback.state.as_deref(), "openai")?;
@@ -191,14 +273,14 @@ impl AuthDriver for OpenAIOAuthDriver {
 
         let client = required_http_client(ctx.http_client)?;
         let response = client
-            .post(OPENAI_TOKEN_URL)
+            .post(config.oauth.token_url.as_str())
             .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
             .header(ACCEPT, "application/json")
             .form(&[
                 ("grant_type", "authorization_code"),
                 ("code", code),
                 ("redirect_uri", state.pkce.redirect_uri.as_str()),
-                ("client_id", OPENAI_CLIENT_ID),
+                ("client_id", config.oauth.client_id.as_str()),
                 ("code_verifier", state.pkce.code_verifier.as_str()),
             ])
             .send()
@@ -212,10 +294,15 @@ impl AuthDriver for OpenAIOAuthDriver {
             bail!("openai oauth token exchange failed: HTTP {status} {detail}");
         }
 
-        Self::normalize_token_response(&body, None)
+        Self::normalize_token_response(&body, None, &config.runtime)
     }
 
-    async fn refresh(&self, credential: &StoredCredential, ctx: RefreshAuthContext) -> Result<CredentialBundle> {
+    async fn refresh(
+        &self,
+        credential: &StoredCredential,
+        ctx: RefreshAuthContext,
+    ) -> Result<CredentialBundle> {
+        let config = Self::codex_config()?;
         let refresh_token = credential
             .refresh_token
             .as_deref()
@@ -225,14 +312,14 @@ impl AuthDriver for OpenAIOAuthDriver {
         let client = required_http_client(ctx.http_client)?;
 
         let response = client
-            .post(OPENAI_TOKEN_URL)
+            .post(config.oauth.token_url.as_str())
             .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
             .header(ACCEPT, "application/json")
             .form(&[
                 ("grant_type", "refresh_token"),
-                ("client_id", OPENAI_CLIENT_ID),
+                ("client_id", config.oauth.client_id.as_str()),
                 ("refresh_token", refresh_token),
-                ("scope", "openid profile email"),
+                ("scope", config.oauth.scope.as_str()),
             ])
             .send()
             .await
@@ -245,10 +332,15 @@ impl AuthDriver for OpenAIOAuthDriver {
             bail!("openai oauth token refresh failed: HTTP {status} {detail}");
         }
 
-        Self::normalize_token_response(&body, Some(refresh_token))
+        Self::normalize_token_response(&body, Some(refresh_token), &config.runtime)
     }
 
-    fn bind_runtime(&self, provider: &Provider, credential: &StoredCredential) -> Result<RuntimeBinding> {
+    fn bind_runtime(
+        &self,
+        provider: &Provider,
+        credential: &StoredCredential,
+    ) -> Result<RuntimeBinding> {
+        let config = Self::codex_config()?;
         let account_id = Self::extract_account_id(credential);
         let mut extra_headers = HashMap::new();
         if let Some(account_id) = account_id {
@@ -258,9 +350,9 @@ impl AuthDriver for OpenAIOAuthDriver {
             .resource_url
             .clone()
             .filter(|value| !value.trim().is_empty())
-            .or_else(|| Some(CODEX_API_BASE_URL.to_string()));
+            .or_else(|| Some(config.runtime.api_base_url.clone()));
 
-        let models_source_override = Some(Self::codex_models_source());
+        let models_source_override = Some(Self::codex_models_source(&config.runtime));
         let capabilities_source_override = provider
             .capabilities_source
             .clone()
