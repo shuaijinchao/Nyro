@@ -2000,6 +2000,7 @@ impl AdminService {
             .clone()
             .or_else(|| Some(provider.api_key.clone()))
             .unwrap_or_default();
+        let protocol_endpoints = Some(sync_runtime_protocol_endpoints(provider, &base_url)?);
 
         self.gw
             .storage
@@ -2008,6 +2009,7 @@ impl AdminService {
                 &provider.id,
                 UpdateProvider {
                     base_url: Some(base_url),
+                    protocol_endpoints,
                     models_source,
                     capabilities_source,
                     api_key: Some(api_key),
@@ -2476,6 +2478,29 @@ fn resolve_provider_credential(provider: &Provider) -> anyhow::Result<String> {
     }
 
     Ok(credential.to_string())
+}
+
+fn sync_runtime_protocol_endpoints(provider: &Provider, base_url: &str) -> anyhow::Result<String> {
+    let mut endpoints = provider.parsed_protocol_endpoints();
+    let runtime_base_url = base_url.trim();
+
+    if runtime_base_url.is_empty() {
+        return Ok(serde_json::to_string(&endpoints)?);
+    }
+
+    for protocol in [provider.protocol.trim(), provider.effective_default_protocol().trim()] {
+        if protocol.is_empty() {
+            continue;
+        }
+        endpoints
+            .entry(protocol.to_string())
+            .and_modify(|entry| entry.base_url = runtime_base_url.to_string())
+            .or_insert_with(|| ProtocolEndpointEntry {
+                base_url: runtime_base_url.to_string(),
+            });
+    }
+
+    Ok(serde_json::to_string(&endpoints)?)
 }
 
 fn runtime_binding_headers(binding: &RuntimeBinding) -> anyhow::Result<HeaderMap> {
