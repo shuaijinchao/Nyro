@@ -97,7 +97,7 @@ pub fn validate_callback_state(expected_state: &str, actual_state: Option<&str>,
         return Ok(());
     }
     let Some(actual_state) = actual_state.map(str::trim).filter(|v| !v.is_empty()) else {
-        return Ok(());
+        bail!("{provider} OAuth state is missing");
     };
     if actual_state != expected_state {
         bail!("{provider} OAuth state mismatch");

@@ -63,9 +63,9 @@ pub struct AdminService {
     gw: Gateway,
 }
 
-struct ResolvedAdminProviderRuntime {
-    access_token: String,
-    binding: RuntimeBinding,
+pub(crate) struct ResolvedProviderRuntime {
+    pub access_token: String,
+    pub binding: RuntimeBinding,
 }
 
 impl AdminService {
@@ -725,7 +725,7 @@ impl AdminService {
 
     pub async fn test_provider_models(&self, id: &str) -> anyhow::Result<Vec<String>> {
         let provider = self.get_provider(id).await?;
-        let runtime = self.resolve_provider_runtime_for_admin(&provider).await?;
+        let runtime = self.resolve_provider_runtime(&provider).await?;
         let credential = runtime.access_token.clone();
         let endpoint = runtime
             .binding
@@ -790,7 +790,7 @@ impl AdminService {
 
     pub async fn get_provider_models(&self, id: &str) -> anyhow::Result<Vec<String>> {
         let provider = self.get_provider(id).await?;
-        let runtime = self.resolve_provider_runtime_for_admin(&provider).await?;
+        let runtime = self.resolve_provider_runtime(&provider).await?;
         let credential = runtime.access_token.clone();
 
         if let Some(endpoint) = runtime
@@ -1795,10 +1795,10 @@ impl AdminService {
         self.gw.storage.settings().set(&key, "").await
     }
 
-    async fn resolve_provider_runtime_for_admin(
+    pub(crate) async fn resolve_provider_runtime(
         &self,
         provider: &Provider,
-    ) -> anyhow::Result<ResolvedAdminProviderRuntime> {
+    ) -> anyhow::Result<ResolvedProviderRuntime> {
         let fallback = provider.api_key.trim().to_string();
         let driver_key = provider
             .vendor
@@ -1809,7 +1809,7 @@ impl AdminService {
             if fallback.is_empty() {
                 anyhow::bail!("provider api key is empty");
             }
-            return Ok(ResolvedAdminProviderRuntime {
+            return Ok(ResolvedProviderRuntime {
                 access_token: provider.api_key.clone(),
                 binding: RuntimeBinding::default(),
             });
@@ -1819,7 +1819,7 @@ impl AdminService {
             if fallback.is_empty() {
                 anyhow::bail!("provider api key is empty");
             }
-            return Ok(ResolvedAdminProviderRuntime {
+            return Ok(ResolvedProviderRuntime {
                 access_token: provider.api_key.clone(),
                 binding: RuntimeBinding::default(),
             });
@@ -1832,7 +1832,7 @@ impl AdminService {
             if fallback.is_empty() {
                 anyhow::bail!("provider api key is empty");
             }
-            return Ok(ResolvedAdminProviderRuntime {
+            return Ok(ResolvedProviderRuntime {
                 access_token: provider.api_key.clone(),
                 binding: RuntimeBinding::default(),
             });
@@ -1847,7 +1847,7 @@ impl AdminService {
             .to_string();
 
         if !access_token.is_empty() && !is_expired_at(credential.expires_at.as_deref()) {
-            return Ok(ResolvedAdminProviderRuntime {
+            return Ok(ResolvedProviderRuntime {
                 access_token,
                 binding: driver.bind_runtime(provider, &credential)?,
             });
@@ -1861,7 +1861,7 @@ impl AdminService {
             .to_string();
         if refresh_token.is_empty() {
             if !access_token.is_empty() {
-                return Ok(ResolvedAdminProviderRuntime {
+                return Ok(ResolvedProviderRuntime {
                     access_token,
                     binding: driver.bind_runtime(provider, &credential)?,
                 });
@@ -1869,7 +1869,7 @@ impl AdminService {
             if fallback.is_empty() {
                 anyhow::bail!("provider credential is empty");
             }
-            return Ok(ResolvedAdminProviderRuntime {
+            return Ok(ResolvedProviderRuntime {
                 access_token: provider.api_key.clone(),
                 binding: driver.bind_runtime(provider, &credential)?,
             });
@@ -1907,7 +1907,7 @@ impl AdminService {
                 if fallback.is_empty() {
                     return Err(error.context("refresh oauth access token"));
                 }
-                return Ok(ResolvedAdminProviderRuntime {
+                return Ok(ResolvedProviderRuntime {
                     access_token: provider.api_key.clone(),
                     binding: driver.bind_runtime(provider, &credential)?,
                 });
@@ -1941,7 +1941,7 @@ impl AdminService {
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| anyhow::anyhow!("provider credential refresh returned empty access token"))?;
 
-        Ok(ResolvedAdminProviderRuntime {
+        Ok(ResolvedProviderRuntime {
             access_token,
             binding: driver.bind_runtime(provider, &refreshed_credential)?,
         })
@@ -2039,7 +2039,7 @@ impl AdminService {
                 continue;
             }
 
-            match self.resolve_provider_runtime_for_admin(&provider).await {
+            match self.resolve_provider_runtime(&provider).await {
                 Ok(_) => refreshed += 1,
                 Err(error) => tracing::warn!(
                     "background oauth refresh failed for provider {} ({}): {}",
