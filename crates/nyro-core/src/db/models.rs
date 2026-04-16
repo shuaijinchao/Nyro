@@ -491,12 +491,6 @@ pub struct ImportResult {
 }
 
 impl Provider {
-    pub fn effective_models_source(&self) -> Option<&str> {
-        self.models_source
-            .as_deref()
-            .filter(|v| !v.trim().is_empty())
-    }
-
     pub fn effective_auth_mode(&self) -> String {
         resolve_preset_channel_auth_mode(self.preset_key.as_deref(), self.channel.as_deref())
             .unwrap_or_else(|| {
@@ -507,6 +501,12 @@ impl Provider {
                     mode.to_string()
                 }
             })
+    }
+
+    pub fn effective_models_source(&self) -> Option<&str> {
+        self.models_source
+            .as_deref()
+            .filter(|v| !v.trim().is_empty())
     }
 
     /// Resolve effective default_protocol: new field > legacy `protocol`.
@@ -523,9 +523,7 @@ impl Provider {
     /// Falls back to building a single-entry map from legacy `protocol`/`base_url`.
     pub fn parsed_protocol_endpoints(&self) -> HashMap<String, ProtocolEndpointEntry> {
         if !self.protocol_endpoints.trim().is_empty() && self.protocol_endpoints.trim() != "{}" {
-            if let Ok(map) = serde_json::from_str::<HashMap<String, ProtocolEndpointEntry>>(
-                &self.protocol_endpoints,
-            ) {
+            if let Ok(map) = serde_json::from_str::<HashMap<String, ProtocolEndpointEntry>>(&self.protocol_endpoints) {
                 if !map.is_empty() {
                     return map;
                 }

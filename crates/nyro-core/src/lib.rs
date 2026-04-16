@@ -16,18 +16,20 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use dashmap::DashMap;
-use tokio::sync::broadcast;
 use tokio::sync::mpsc;
+use tokio::sync::broadcast;
 
-use crate::cache::{
-    CacheBackend, CacheConfig, CacheStorageKind, DatabaseCacheBackend, InMemoryCacheBackend,
-    MemoryVectorStore, VectorStorageKind, VectorStore,
+use config::{
+    GatewayConfig, SqlStorageConfig, StorageBackendKind,
 };
-use crate::router::health::HealthRegistry;
-use config::{GatewayConfig, SqlStorageConfig, StorageBackendKind};
 use logging::LogEntry;
 use storage::sql::config::SqlBackendConfig;
 use storage::{DynStorage, PostgresStorage, SqliteStorage};
+use crate::router::health::HealthRegistry;
+use crate::cache::{
+    CacheBackend, CacheConfig, CacheStorageKind, DatabaseCacheBackend, InMemoryCacheBackend,
+    MemoryVectorStore, VectorStore, VectorStorageKind,
+};
 
 #[derive(Clone, Debug)]
 pub struct CapabilityCacheEntry {
@@ -246,10 +248,7 @@ impl Gateway {
         admin::AdminService::new(self.clone())
     }
 
-    pub async fn http_client_for_provider(
-        &self,
-        use_proxy: bool,
-    ) -> anyhow::Result<reqwest::Client> {
+    pub async fn http_client_for_provider(&self, use_proxy: bool) -> anyhow::Result<reqwest::Client> {
         if !use_proxy {
             return Ok(self.http_client.clone());
         }
@@ -349,16 +348,10 @@ impl Gateway {
 }
 
 fn parse_bool_setting(value: &str) -> bool {
-    matches!(
-        value.trim().to_ascii_lowercase().as_str(),
-        "1" | "true" | "yes" | "on"
-    )
+    matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
 }
 
-fn to_sql_backend_config(
-    config: &SqlStorageConfig,
-    backend: &str,
-) -> anyhow::Result<SqlBackendConfig> {
+fn to_sql_backend_config(config: &SqlStorageConfig, backend: &str) -> anyhow::Result<SqlBackendConfig> {
     let url = config
         .configured_url()
         .with_context(|| format!("{backend} backend selected but storage url is empty"))?;
