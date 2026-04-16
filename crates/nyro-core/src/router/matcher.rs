@@ -18,5 +18,7 @@ impl RouteCache {
 }
 
 pub fn match_route<'a>(routes: &'a [Route], model: &str) -> Option<&'a Route> {
-    routes.iter().find(|route| route.virtual_model == model)
+    routes
+        .iter()
+        .find(|route| route.virtual_model == model)
 }

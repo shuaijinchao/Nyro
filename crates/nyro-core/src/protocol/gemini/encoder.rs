@@ -2,8 +2,8 @@ use anyhow::Result;
 use reqwest::header::HeaderMap;
 use serde_json::Value;
 
-use crate::protocol::EgressEncoder;
 use crate::protocol::types::*;
+use crate::protocol::EgressEncoder;
 
 pub struct GeminiEncoder;
 
@@ -58,7 +58,10 @@ impl EgressEncoder for GeminiEncoder {
                     if let Some(ref desc) = t.description {
                         d.insert("description".into(), Value::String(desc.clone()));
                     }
-                    d.insert("parameters".into(), sanitize_gemini_schema(&t.parameters));
+                    d.insert(
+                        "parameters".into(),
+                        sanitize_gemini_schema(&t.parameters),
+                    );
                     decl
                 })
                 .collect();
@@ -73,7 +76,10 @@ impl EgressEncoder for GeminiEncoder {
 
     fn egress_path(&self, model: &str, stream: bool) -> String {
         if stream {
-            format!("/v1beta/models/{}:streamGenerateContent?alt=sse", model)
+            format!(
+                "/v1beta/models/{}:streamGenerateContent?alt=sse",
+                model
+            )
         } else {
             format!("/v1beta/models/{}:generateContent", model)
         }
@@ -126,8 +132,8 @@ fn encode_content(msg: &InternalMessage) -> Result<Value> {
                     parts.push(serde_json::json!({"text": t}));
                 }
                 for tc in tcs {
-                    let args: Value = serde_json::from_str(&tc.arguments)
-                        .unwrap_or(Value::Object(Default::default()));
+                    let args: Value =
+                        serde_json::from_str(&tc.arguments).unwrap_or(Value::Object(Default::default()));
                     parts.push(serde_json::json!({
                         "functionCall": {"name": tc.name, "args": args}
                     }));
@@ -137,31 +143,33 @@ fn encode_content(msg: &InternalMessage) -> Result<Value> {
                 vec![serde_json::json!({"text": t})]
             }
         }
-        MessageContent::Blocks(blocks) => blocks
-            .iter()
-            .map(|b| match b {
-                ContentBlock::Text { text } => serde_json::json!({"text": text}),
-                ContentBlock::Image { source } => {
-                    serde_json::json!({
-                        "inlineData": {
-                            "mimeType": source.media_type,
-                            "data": source.data,
-                        }
-                    })
-                }
-                ContentBlock::ToolUse { id: _, name, input } => {
-                    serde_json::json!({"functionCall": {"name": name, "args": input}})
-                }
-                ContentBlock::ToolResult {
-                    tool_use_id,
-                    content,
-                } => {
-                    serde_json::json!({
-                        "functionResponse": {"name": tool_use_id, "response": content}
-                    })
-                }
-            })
-            .collect(),
+        MessageContent::Blocks(blocks) => {
+            blocks
+                .iter()
+                .map(|b| match b {
+                    ContentBlock::Text { text } => serde_json::json!({"text": text}),
+                    ContentBlock::Image { source } => {
+                        serde_json::json!({
+                            "inlineData": {
+                                "mimeType": source.media_type,
+                                "data": source.data,
+                            }
+                        })
+                    }
+                    ContentBlock::ToolUse { id: _, name, input } => {
+                        serde_json::json!({"functionCall": {"name": name, "args": input}})
+                    }
+                    ContentBlock::ToolResult {
+                        tool_use_id,
+                        content,
+                    } => {
+                        serde_json::json!({
+                            "functionResponse": {"name": tool_use_id, "response": content}
+                        })
+                    }
+                })
+                .collect()
+        }
     };
 
     Ok(serde_json::json!({"role": role, "parts": parts}))

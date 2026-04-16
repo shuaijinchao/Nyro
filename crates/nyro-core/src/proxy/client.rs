@@ -26,13 +26,7 @@ impl ProxyClient {
         let mut headers = adapter.auth_headers(api_key);
         headers.extend(extra_headers);
 
-        let resp = self
-            .http
-            .post(&url)
-            .headers(headers)
-            .json(&body)
-            .send()
-            .await?;
+        let resp = self.http.post(&url).headers(headers).json(&body).send().await?;
         let status = resp.status().as_u16();
         let json: Value = resp.json().await?;
         Ok((json, status))
@@ -51,13 +45,7 @@ impl ProxyClient {
         let mut headers = adapter.auth_headers(api_key);
         headers.extend(extra_headers);
 
-        let resp = self
-            .http
-            .post(&url)
-            .headers(headers)
-            .json(&body)
-            .send()
-            .await?;
+        let resp = self.http.post(&url).headers(headers).json(&body).send().await?;
         let status = resp.status().as_u16();
         Ok((resp, status))
     }
