@@ -1,5 +1,5 @@
 # Nyro AI Gateway Install Script for Windows
-# Usage: irm https://raw.githubusercontent.com/NYRO-WAY/NYRO/master/scripts/install/install.ps1 | iex
+# Usage: irm https://raw.githubusercontent.com/nyroway/nyro/master/scripts/install/install.ps1 | iex
 #
 # Parameters (set before running):
 #   $Version = "1.0.0"   # Install specific version
@@ -10,7 +10,7 @@ if (-not $DryRun) { $DryRun = $false }
 
 $ErrorActionPreference = "Continue"
 
-$Repo = "NYRO-WAY/NYRO"
+$Repo = "nyroway/nyro"
 $AppName = "Nyro"
 $GithubApi = "https://api.github.com/repos/$Repo/releases"
 $script:ReleaseVersion = ""
@@ -81,7 +81,7 @@ function Get-ReleaseVersion {
     }
 
     Script-Error "Failed to determine latest version. Try specifying version manually:"
-    Write-Host '  $Version = "1.0.0"; irm https://raw.githubusercontent.com/NYRO-WAY/NYRO/master/scripts/install/install.ps1 | iex' -ForegroundColor Yellow
+    Write-Host '  $Version = "1.0.0"; irm https://raw.githubusercontent.com/nyroway/nyro/master/scripts/install/install.ps1 | iex' -ForegroundColor Yellow
     return $false
 }
 

@@ -30,7 +30,7 @@ const NAV_ITEMS = [
   { label: "Settings", path: "/settings", icon: Settings },
   {
     label: "Feedback",
-    href: "https://github.com/NYRO-WAY/NYRO/issues/new",
+    href: "https://github.com/nyroway/nyro/issues/new",
     icon: MessageSquarePlus,
     external: true as const,
   },

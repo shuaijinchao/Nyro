@@ -58,7 +58,6 @@ export interface ApiKey {
   rpd?: number | null;
   tpm?: number | null;
   tpd?: number | null;
-  status?: "active" | "revoked";
   is_enabled: boolean;
   expires_at?: string | null;
   created_at: string;

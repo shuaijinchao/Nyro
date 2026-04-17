@@ -1,9 +1,8 @@
+use indexmap::IndexMap;
+use nyro_core::cache::{CacheConfig, ExactCacheConfig, SemanticCacheConfig};
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::time::Duration;
-use nyro_core::cache::{
-    CacheConfig, CacheStorageKind, ExactCacheConfig, SemanticCacheConfig, VectorStorageKind,
-};
-use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 pub struct YamlConfig {
@@ -32,8 +31,6 @@ pub struct YamlExactCacheConfig {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
-    pub storage: Option<String>,
-    #[serde(default)]
     pub default_ttl: Option<u64>,
     #[serde(default)]
     pub max_entries: Option<usize>,
@@ -43,8 +40,6 @@ pub struct YamlExactCacheConfig {
 pub struct YamlSemanticCacheConfig {
     #[serde(default)]
     pub enabled: bool,
-    #[serde(default)]
-    pub storage: Option<String>,
     #[serde(default)]
     pub embedding_route: Option<String>,
     #[serde(default)]
@@ -82,17 +77,89 @@ fn default_proxy_port() -> u16 {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(try_from = "YamlProviderRaw")]
 pub struct YamlProvider {
     pub name: String,
-    pub default_protocol: String,
-    #[serde(default)]
-    pub endpoints: HashMap<String, YamlEndpoint>,
+    pub default_protocol: Option<String>,
+    pub endpoints: IndexMap<String, YamlEndpoint>,
     pub api_key: String,
-    #[serde(default)]
     pub use_proxy: bool,
     pub models_source: Option<String>,
     pub capabilities_source: Option<String>,
     pub static_models: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct YamlProviderRaw {
+    pub name: String,
+    #[serde(default)]
+    pub default_protocol: Option<String>,
+    #[serde(default)]
+    pub protocol: Option<String>,
+    #[serde(default)]
+    pub endpoints: IndexMap<String, YamlEndpoint>,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub apikey: Option<String>,
+    #[serde(default)]
+    pub use_proxy: bool,
+    #[serde(default)]
+    pub models_source: Option<String>,
+    #[serde(default)]
+    pub capabilities_source: Option<String>,
+    #[serde(default)]
+    pub static_models: Option<Vec<String>>,
+}
+
+impl TryFrom<YamlProviderRaw> for YamlProvider {
+    type Error = String;
+
+    fn try_from(r: YamlProviderRaw) -> Result<Self, Self::Error> {
+        let default_protocol = match (r.default_protocol, r.protocol) {
+            (Some(_), Some(_)) => {
+                return Err(format!(
+                    "provider '{}': 'default_protocol' and its alias 'protocol' cannot both be set",
+                    r.name
+                ));
+            }
+            (Some(v), None) | (None, Some(v)) => Some(v),
+            (None, None) => None,
+        };
+        let api_key = match (r.api_key, r.apikey) {
+            (Some(_), Some(_)) => {
+                return Err(format!(
+                    "provider '{}': 'api_key' and its alias 'apikey' cannot both be set",
+                    r.name
+                ));
+            }
+            (Some(v), None) | (None, Some(v)) => v,
+            (None, None) => {
+                return Err(format!("provider '{}': 'api_key' is required", r.name));
+            }
+        };
+        Ok(YamlProvider {
+            name: r.name,
+            default_protocol,
+            endpoints: r.endpoints,
+            api_key,
+            use_proxy: r.use_proxy,
+            models_source: r.models_source,
+            capabilities_source: r.capabilities_source,
+            static_models: r.static_models,
+        })
+    }
+}
+
+impl YamlProvider {
+    /// Resolve the effective default protocol: explicit value if set,
+    /// otherwise the first endpoint key in YAML declaration order.
+    pub fn resolved_protocol(&self) -> Option<&str> {
+        if let Some(p) = self.default_protocol.as_deref() {
+            return Some(p);
+        }
+        self.endpoints.keys().next().map(String::as_str)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -156,13 +223,30 @@ impl YamlConfig {
                 anyhow::bail!("providers[{i}]: name is required");
             }
             if p.endpoints.is_empty() {
-                anyhow::bail!("providers[{i}] ({}): at least one endpoint is required", p.name);
-            }
-            if !p.endpoints.contains_key(&p.default_protocol) {
                 anyhow::bail!(
-                    "providers[{i}] ({}): default_protocol '{}' has no matching endpoint",
+                    "providers[{i}] ({}): at least one endpoint is required",
+                    p.name
+                );
+            }
+            let resolved = p.resolved_protocol().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "providers[{i}] ({}): unable to determine protocol from endpoints",
+                    p.name
+                )
+            })?;
+            if !p.endpoints.contains_key(resolved) {
+                anyhow::bail!(
+                    "providers[{i}] ({}): protocol '{}' has no matching endpoint in 'endpoints'",
                     p.name,
-                    p.default_protocol
+                    resolved
+                );
+            }
+            if p.default_protocol.is_none() && p.endpoints.len() > 1 {
+                tracing::warn!(
+                    "providers[{i}] ({}): 'protocol' not set and 'endpoints' has {} entries; inferring '{}' as default (set 'protocol' explicitly to silence this warning)",
+                    p.name,
+                    p.endpoints.len(),
+                    resolved
                 );
             }
         }
@@ -199,45 +283,23 @@ impl YamlConfig {
 
 impl YamlCacheConfig {
     pub fn to_cache_config(&self) -> CacheConfig {
-        let exact_storage = match self
-            .exact
-            .storage
-            .as_deref()
-            .unwrap_or("memory")
-            .trim()
-            .to_ascii_lowercase()
-            .as_str()
-        {
-            "database" => CacheStorageKind::Database,
-            "in_memory" | "inmemory" => CacheStorageKind::Memory,
-            _ => CacheStorageKind::Memory,
-        };
-        let semantic_storage = match self
-            .semantic
-            .storage
-            .as_deref()
-            .unwrap_or("memory")
-            .trim()
-            .to_ascii_lowercase()
-            .as_str()
-        {
-            _ => VectorStorageKind::Memory,
-        };
         CacheConfig {
             exact: ExactCacheConfig {
                 enabled: self.exact.enabled,
-                storage: exact_storage,
                 default_ttl: Duration::from_secs(self.exact.default_ttl.unwrap_or(3600)),
                 max_entries: self.exact.max_entries.unwrap_or(1000),
+                stream_replay_tps: 100,
+                expose_headers: true,
             },
             semantic: SemanticCacheConfig {
                 enabled: self.semantic.enabled,
-                storage: semantic_storage,
                 embedding_route: self.semantic.embedding_route.clone().unwrap_or_default(),
                 similarity_threshold: self.semantic.similarity_threshold.unwrap_or(0.92),
                 vector_dimensions: self.semantic.vector_dimensions.unwrap_or(1536),
                 default_ttl: Duration::from_secs(self.semantic.default_ttl.unwrap_or(600)),
                 max_entries: self.semantic.max_entries.unwrap_or(500),
+                stream_replay_tps: 100,
+                expose_headers: true,
             },
         }
     }
@@ -251,7 +313,8 @@ pub fn build_providers(yaml: &YamlConfig) -> Vec<Provider> {
         .enumerate()
         .map(|(i, yp)| {
             let id = format!("yaml-provider-{i}");
-            let default_ep = yp.endpoints.get(&yp.default_protocol);
+            let resolved_protocol = yp.resolved_protocol().unwrap_or_default().to_string();
+            let default_ep = yp.endpoints.get(&resolved_protocol);
             let base_url = default_ep.map(|e| e.base_url.clone()).unwrap_or_default();
             let endpoints_json: HashMap<String, serde_json::Value> = yp
                 .endpoints
@@ -268,9 +331,9 @@ pub fn build_providers(yaml: &YamlConfig) -> Vec<Provider> {
                 id,
                 name: yp.name.clone(),
                 vendor: None,
-                protocol: yp.default_protocol.clone(),
+                protocol: resolved_protocol.clone(),
                 base_url,
-                default_protocol: yp.default_protocol.clone(),
+                default_protocol: resolved_protocol,
                 protocol_endpoints: serde_json::to_string(&endpoints_json).unwrap_or_default(),
                 preset_key: None,
                 channel: None,
@@ -285,7 +348,7 @@ pub fn build_providers(yaml: &YamlConfig) -> Vec<Provider> {
                 use_proxy: yp.use_proxy,
                 last_test_success: None,
                 last_test_at: None,
-                is_active: true,
+                is_enabled: true,
                 created_at: now.clone(),
                 updated_at: now,
             }
@@ -336,12 +399,14 @@ pub fn build_routes(yaml: &YamlConfig, providers: &[Provider]) -> Vec<Route> {
                 target_provider: primary.map(|t| t.provider_id.clone()).unwrap_or_default(),
                 target_model: primary.map(|t| t.model.clone()).unwrap_or_default(),
                 access_control: yr.access_control,
-                route_type: parse_route_type(&yr.route_type).unwrap_or("chat").to_string(),
+                route_type: parse_route_type(&yr.route_type)
+                    .unwrap_or("chat")
+                    .to_string(),
                 cache_exact_ttl: None,
                 cache_semantic_ttl: None,
                 cache_semantic_threshold: None,
                 cache: None,
-                is_active: true,
+                is_enabled: true,
                 created_at: now,
                 targets,
             }
@@ -354,5 +419,163 @@ fn parse_route_type(raw: &str) -> anyhow::Result<&'static str> {
         "chat" => Ok("chat"),
         "embedding" => Ok("embedding"),
         _ => anyhow::bail!("unsupported route type"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_provider(yaml: &str) -> Result<YamlProvider, serde_yaml::Error> {
+        serde_yaml::from_str(yaml)
+    }
+
+    #[test]
+    fn canonical_names_work() {
+        let yaml = r#"
+name: openai
+default_protocol: openai
+endpoints:
+  openai:
+    base_url: https://api.openai.com/v1
+api_key: sk-canonical
+"#;
+        let p = parse_provider(yaml).expect("should parse");
+        assert_eq!(p.default_protocol.as_deref(), Some("openai"));
+        assert_eq!(p.api_key, "sk-canonical");
+        assert_eq!(p.resolved_protocol(), Some("openai"));
+    }
+
+    #[test]
+    fn alias_protocol_and_apikey_work() {
+        let yaml = r#"
+name: openai
+protocol: openai
+endpoints:
+  openai:
+    base_url: https://api.openai.com/v1
+apikey: sk-alias
+"#;
+        let p = parse_provider(yaml).expect("should parse");
+        assert_eq!(p.default_protocol.as_deref(), Some("openai"));
+        assert_eq!(p.api_key, "sk-alias");
+    }
+
+    #[test]
+    fn omitted_protocol_single_endpoint_is_inferred() {
+        let yaml = r#"
+name: openai
+endpoints:
+  openai:
+    base_url: https://api.openai.com/v1
+api_key: sk-x
+"#;
+        let p = parse_provider(yaml).expect("should parse");
+        assert!(p.default_protocol.is_none());
+        assert_eq!(p.resolved_protocol(), Some("openai"));
+    }
+
+    #[test]
+    fn omitted_protocol_multi_endpoint_uses_first_declared() {
+        let yaml = r#"
+name: deepseek
+endpoints:
+  anthropic:
+    base_url: https://api.deepseek.com/anthropic
+  openai:
+    base_url: https://api.deepseek.com/v1
+apikey: sk-x
+"#;
+        let p = parse_provider(yaml).expect("should parse");
+        assert!(p.default_protocol.is_none());
+        assert_eq!(p.resolved_protocol(), Some("anthropic"));
+    }
+
+    #[test]
+    fn conflict_default_protocol_and_protocol_rejects() {
+        let yaml = r#"
+name: openai
+default_protocol: openai
+protocol: anthropic
+endpoints:
+  openai:
+    base_url: https://api.openai.com/v1
+api_key: sk-x
+"#;
+        let err = parse_provider(yaml).expect_err("should reject").to_string();
+        assert!(
+            err.contains("default_protocol") && err.contains("protocol"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn conflict_api_key_and_apikey_rejects() {
+        let yaml = r#"
+name: openai
+protocol: openai
+endpoints:
+  openai:
+    base_url: https://api.openai.com/v1
+api_key: sk-a
+apikey: sk-b
+"#;
+        let err = parse_provider(yaml).expect_err("should reject").to_string();
+        assert!(
+            err.contains("api_key") && err.contains("apikey"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn missing_api_key_rejects() {
+        let yaml = r#"
+name: openai
+protocol: openai
+endpoints:
+  openai:
+    base_url: https://api.openai.com/v1
+"#;
+        let err = parse_provider(yaml).expect_err("should reject").to_string();
+        assert!(err.contains("api_key"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn validate_accepts_inferred_protocol() {
+        let yaml = r#"
+providers:
+  - name: openai
+    endpoints:
+      openai:
+        base_url: https://api.openai.com/v1
+    apikey: sk-x
+routes:
+  - name: gpt-4o
+    vmodel: gpt-4o
+    targets:
+      - provider: openai
+        model: gpt-4o
+"#;
+        let cfg: YamlConfig = serde_yaml::from_str(yaml).expect("parse");
+        cfg.validate().expect("validate");
+    }
+
+    #[test]
+    fn validate_rejects_unknown_protocol_without_matching_endpoint() {
+        let yaml = r#"
+providers:
+  - name: openai
+    protocol: gemini
+    endpoints:
+      openai:
+        base_url: https://api.openai.com/v1
+    api_key: sk-x
+"#;
+        let cfg: YamlConfig = serde_yaml::from_str(yaml).expect("parse");
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(
+            err.contains("protocol 'gemini'") && err.contains("no matching endpoint"),
+            "unexpected error: {err}"
+        );
     }
 }

@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/NYRO-WAY/NYRO/releases/latest"><img src="https://img.shields.io/github/v/release/NYRO-WAY/NYRO" alt="Release"></a>
+  <a href="https://github.com/nyroway/nyro/releases/latest"><img src="https://img.shields.io/github/v/release/nyroway/nyro" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
   <a href="README_CN.md"><img src="https://img.shields.io/badge/文档-中文-8A2BE2" alt="中文"></a>
 </p>
@@ -59,8 +59,6 @@ Nyro ships as a **desktop app** (macOS / Windows / Linux) and a **standalone ser
 
 ## Screenshots
 
-## Screenshots
-
 <table>
   <tr>
     <td align="center" width="50%"><img src="docs/images/NYRO-ui-providers-add-en.png" height="260"><br><sub>Provider Management</sub></td>
@@ -83,20 +81,36 @@ Nyro ships as a **desktop app** (macOS / Windows / Linux) and a **standalone ser
 - **Streaming**: full SSE passthrough and cross-protocol format conversion
 - **Reasoning**: `<think>` tag parsing and conversion across protocol boundaries
 - **Tool calls**: cross-protocol tool call and result format normalization
+- **Route types**: chat and embedding routes with type-aware handling
 
 ### Routing
 
 - Exact match routing on `virtual_model`
 - Virtual model names decouple client requests from actual backend models
-- Fallback routing with automatic failover on upstream errors
+- Multi-target routing with strategy selection: weighted load balancing or priority-based failover
+- Health-aware failover: 3 consecutive failures mark a target unhealthy, auto-recovery after 30s
 - Per-route access control with API key authorization
+
+### Caching
+
+- **Exact cache**: identical requests return cached responses instantly
+- **Semantic cache**: embedding-based similarity matching reuses results for similar queries
+- Per-route TTL and threshold overrides
+- Stream replay for cached streaming responses
+
+### Model Capabilities
+
+- Auto-detect model capabilities (tool call, reasoning, context window, modalities, costs)
+- `ai://models.dev` built-in data source for offline capability lookup
+- HTTP model list endpoints for dynamic model discovery
+- Capability tags shown in route configuration UI
 
 ### Security
 
 - AES-256-GCM encrypted API key storage
 - Independent proxy and admin bearer token controls
 - Default-deny route authorization — keys must be explicitly bound to routes
-- Per-key quotas: RPM / TPM / TPD / RPD
+- Per-key quotas: RPM / RPD / TPM / TPD
 
 ### Management
 
@@ -104,6 +118,7 @@ Nyro ships as a **desktop app** (macOS / Windows / Linux) and a **standalone ser
 - Request logs with provider, model, token, and latency detail
 - Usage charts by model and provider
 - Provider connectivity testing with live feedback
+- Configuration import / export
 
 ### Connect — Integration
 
@@ -136,7 +151,7 @@ Nyro detects installed tools, generates the correct configuration for the select
 | Windows | x64 · ARM64 |
 | Linux | x86\_64 · aarch64 |
 
-**Server Binary**
+**Server Binary** — full mode (DB + Admin API + embedded WebUI) and standalone mode (YAML config only, no DB)
 
 | Platform | Architecture | Access |
 |---|---|---|
@@ -153,7 +168,7 @@ Nyro detects installed tools, generates the correct configuration for the select
 **Homebrew (macOS / Linux)**
 
 ```bash
-brew tap nyro-way/nyro
+brew tap nyroway/nyro
 brew install --cask nyro
 ```
 
@@ -161,15 +176,15 @@ brew install --cask nyro
 
 ```bash
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/NYRO-WAY/NYRO/master/scripts/install/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/nyroway/nyro/master/scripts/install/install.sh | bash
 
 # Windows (PowerShell)
-irm https://raw.githubusercontent.com/NYRO-WAY/NYRO/master/scripts/install/install.ps1 | iex
+irm https://raw.githubusercontent.com/nyroway/nyro/master/scripts/install/install.ps1 | iex
 ```
 
 **Manual Download**
 
-Download the latest installer for your platform from [GitHub Releases](https://github.com/NYRO-WAY/NYRO/releases/latest).
+Download the latest installer for your platform from [GitHub Releases](https://github.com/nyroway/nyro/releases/latest).
 
 > **macOS**: After manual install run `sudo xattr -rd com.apple.quarantine /Applications/Nyro.app`, or use the install script which handles this automatically.
 >
@@ -179,7 +194,7 @@ Download the latest installer for your platform from [GitHub Releases](https://g
 
 ```bash
 # Download
-curl -LO https://github.com/NYRO-WAY/NYRO/releases/latest/download/nyro-server-linux-x86_64
+curl -LO https://github.com/nyroway/nyro/releases/latest/download/nyro-server-linux-x86_64
 chmod +x nyro-server-linux-x86_64
 
 # Start (localhost only, no auth required)
@@ -187,39 +202,34 @@ chmod +x nyro-server-linux-x86_64
 
 # Start (network-exposed, auth required)
 ./nyro-server-linux-x86_64 \
-  --proxy-host 0.0.0.0:19530 \
-  --admin-host 0.0.0.0:19531 \
-  --proxy-key YOUR_PROXY_KEY \
-  --admin-key YOUR_ADMIN_KEY
+  --proxy-host 0.0.0.0 \
+  --admin-host 0.0.0.0 \
+  --admin-token YOUR_ADMIN_TOKEN
+
+# Standalone mode (YAML config, no DB/Admin/WebUI)
+./nyro-server-linux-x86_64 --config config.yaml
 ```
 
 Available server binaries: `linux-x86_64`, `linux-aarch64`, `macos-x86_64`, `macos-aarch64`, `windows-x86_64.exe`, `windows-arm64.exe`
 
-Open `http://localhost:19531` for the management UI.
+Open `http://localhost:19531` for the management UI. See [Server docs](docs/server/README.md) and [Standalone docs](docs/standalone/README.md) for full configuration reference.
 
-### Additional Storage Backend Configuration
+### PostgreSQL Storage Backend
 
-Default server behavior remains unchanged: if you do not pass storage-related options, Nyro continues to use local SQLite under `--data-dir`.
-
-For `postgres`, the server binary also supports selecting a storage backend at startup. To avoid exposing credentials in process arguments, provide the DSN through an environment variable and reference it via `--storage-dsn-env`.
+Default behavior: local SQLite under `--data-dir`. To use PostgreSQL:
 
 ```bash
-# PostgreSQL
-export NYRO_STORAGE_DSN='postgresql://user:pass@host:5432/db'
 ./nyro-server-linux-x86_64 \
-  --storage-backend postgres
+  --storage-backend postgres \
+  --postgres-dsn "postgres://user:pass@host:5432/db"
 ```
 
-Additional storage-related server options:
+Or via environment variable:
 
-- `--storage-backend sqlite|postgres`
-- `--storage-dsn-env` (defaults to `NYRO_STORAGE_DSN`)
-- `--sqlite-migrate-on-start true|false`
-- `--storage-max-connections`
-- `--storage-min-connections`
-- `--storage-acquire-timeout-secs`
-- `--storage-idle-timeout-secs`
-- `--storage-max-lifetime-secs`
+```bash
+export NYRO_POSTGRES_DSN="postgres://user:pass@host:5432/db"
+./nyro-server-linux-x86_64 --storage-backend postgres
+```
 
 ### Docker
 
@@ -234,7 +244,7 @@ Build and run the server distribution image:
 docker build -f docker/runtime/Dockerfile -t nyro:runtime .
 
 docker run --rm \
-  -e NYRO_ADMIN_KEY=change-me \
+  -e NYRO_ADMIN_TOKEN=change-me \
   -p 19530:19530 \
   -p 19531:19531 \
   -v nyro-data:/var/lib/nyro \
@@ -243,7 +253,7 @@ docker run --rm \
 
 Open `http://127.0.0.1:19531` for the management UI.
 
-Use the same `NYRO_ADMIN_KEY` value as the Bearer token for admin API requests.
+Use the same `NYRO_ADMIN_TOKEN` value as the Bearer token for admin API requests.
 
 Override base images with `--build-arg` if you need to use a different registry or a mirrored base image:
 

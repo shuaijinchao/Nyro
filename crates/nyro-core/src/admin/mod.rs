@@ -588,7 +588,7 @@ impl AdminService {
         let refresh_token = input.refresh_token.or(current.refresh_token);
         let expires_at = input.expires_at.or(current.expires_at);
         let use_proxy = input.use_proxy.unwrap_or(current.use_proxy);
-        let is_active = input.is_active.unwrap_or(current.is_active);
+        let is_enabled = input.is_enabled.unwrap_or(current.is_enabled);
         let base_url_changed = base_url != current_base_url;
 
         let provider = self
@@ -615,7 +615,7 @@ impl AdminService {
                     refresh_token,
                     expires_at,
                     use_proxy: Some(use_proxy),
-                    is_active: Some(is_active),
+                    is_enabled: Some(is_enabled),
                 },
             )
             .await?;
@@ -884,7 +884,7 @@ impl AdminService {
 
         for target in ordered_targets {
             let provider = match self.gw.storage.providers().get(&target.provider_id).await? {
-                Some(provider) if provider.is_active => provider,
+                Some(provider) if provider.is_enabled => provider,
                 _ => continue,
             };
             let Some(openai_base_url) = resolve_openai_base_url(&provider) else {
@@ -1127,22 +1127,21 @@ impl AdminService {
             .first()
             .ok_or_else(|| anyhow::anyhow!("at least one route target is required"))?;
         let access_control = input.access_control.unwrap_or(current.access_control);
-        let is_active = input.is_active.unwrap_or(current.is_active);
-        let (cache_exact_ttl, cache_semantic_ttl, cache_semantic_threshold) =
-            if effective_route_type == "embedding" {
-                if has_route_cache_overrides(input.cache.as_ref()) {
-                    anyhow::bail!("embedding routes do not support route cache configuration");
-                }
-                (None, None, None)
-            } else if let Some(cache) = input.cache.as_ref() {
-                flatten_route_cache_columns(Some(cache))
-            } else {
-                (
-                    current.cache_exact_ttl,
-                    current.cache_semantic_ttl,
-                    current.cache_semantic_threshold,
-                )
-            };
+        let is_enabled = input.is_enabled.unwrap_or(current.is_enabled);
+        let (cache_exact_ttl, cache_semantic_ttl, cache_semantic_threshold) = if effective_route_type == "embedding" {
+            if has_route_cache_overrides(input.cache.as_ref()) {
+                anyhow::bail!("embedding routes do not support route cache configuration");
+            }
+            (None, None, None)
+        } else if let Some(cache) = input.cache.as_ref() {
+            flatten_route_cache_columns(Some(cache))
+        } else {
+            (
+                current.cache_exact_ttl,
+                current.cache_semantic_ttl,
+                current.cache_semantic_threshold,
+            )
+        };
         ensure_virtual_model(&virtual_model)?;
         self.ensure_route_unique(Some(id), &virtual_model).await?;
 
@@ -1164,7 +1163,7 @@ impl AdminService {
                     cache_exact_ttl,
                     cache_semantic_ttl,
                     cache_semantic_threshold,
-                    is_active: Some(is_active),
+                    is_enabled: Some(is_enabled),
                 },
             )
             .await?;
@@ -1230,12 +1229,8 @@ impl AdminService {
         let rpd = input.rpd.or(current.rpd);
         let tpm = input.tpm.or(current.tpm);
         let tpd = input.tpd.or(current.tpd);
-        let status = input.status.unwrap_or(current.status);
+        let is_enabled = input.is_enabled.unwrap_or(current.is_enabled);
         let expires_at = input.expires_at.or(current.expires_at);
-
-        if status != "active" && status != "revoked" {
-            anyhow::bail!("invalid key status: {status}");
-        }
 
         self.api_keys_store()?
             .update(
@@ -1246,7 +1241,7 @@ impl AdminService {
                     rpd,
                     tpm,
                     tpd,
-                    status: Some(status),
+                    is_enabled: Some(is_enabled),
                     expires_at,
                     route_ids: input.route_ids,
                 },
@@ -1396,7 +1391,7 @@ impl AdminService {
                     refresh_token: p.refresh_token,
                     expires_at: p.expires_at,
                     use_proxy: p.use_proxy,
-                    is_active: p.is_active,
+                    is_enabled: p.is_enabled,
                 })
                 .collect(),
             routes: routes
@@ -1406,7 +1401,7 @@ impl AdminService {
                     virtual_model: r.virtual_model,
                     target_model: r.target_model,
                     access_control: r.access_control,
-                    is_active: r.is_active,
+                    is_enabled: r.is_enabled,
                 })
                 .collect(),
             settings: settings.into_iter().collect(),
