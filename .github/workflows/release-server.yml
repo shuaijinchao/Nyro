@@ -39,6 +39,22 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install frontend dependencies
+        run: pnpm -C webui install --frozen-lockfile
+
+      - name: Build webui
+        run: pnpm -C webui build
+
       - name: Build nyro-server
         run: cargo build -p nyro-server --release
 
