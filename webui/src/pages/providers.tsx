@@ -71,8 +71,7 @@ const emptyCreate: CreateProvider = {
   protocol: "openai",
   base_url: "https://api.openai.com",
   use_proxy: false,
-  auth_mode: "apikey",
-  oauth_resource_url: "",
+  auth_mode: "api_key",
   preset_key: "",
   channel: "",
   models_source: "",
@@ -253,18 +252,6 @@ function toGatewayBaseUrl(url: string) {
   return normalized;
 }
 
-function normalizeOAuthResourceBaseUrl(resourceUrl?: string | null, vendor?: string | null) {
-  const raw = resourceUrl?.trim();
-  if (!raw) return "";
-  const withScheme = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
-  const normalized = withScheme.replace(/\/+$/, "");
-  const vendorKey = (vendor ?? "").trim().toLowerCase();
-  if (vendorKey === "qwen-code-cli" && !normalized.endsWith("/v1")) {
-    return `${normalized}/v1`;
-  }
-  return normalized;
-}
-
 function defaultModelsEndpoint(baseUrl: string, protocol: ProviderProtocol) {
   const normalized = baseUrl.trim().replace(/\/+$/, "");
   let parsed: URL | null = null;
@@ -315,7 +302,6 @@ function fallbackProviderPreset(): ProviderPreset {
     id: DEFAULT_PRESET_ID,
     label: { zh: "自定义", en: "Custom" },
     defaultProtocol: "openai",
-    authMode: "apikey",
     channels: [],
   };
 }
@@ -324,50 +310,17 @@ function presetChannels(preset?: ProviderPreset | null) {
   return preset?.channels?.length ? preset.channels : [fallbackChannelPreset()];
 }
 
-function previewOAuthPreset(): ProviderPreset {
-  return {
-    id: "qwen-code-cli",
-    label: { zh: "Qwen Code", en: "Qwen Code" },
-    icon: "qwen",
-    defaultProtocol: "openai",
-    authMode: "oauth",
-    channels: [
-      {
-        id: "default",
-        label: { zh: "默认", en: "Default" },
-        baseUrls: {
-          openai: "https://portal.qwen.ai/v1",
-        },
-        modelsSource: "https://chat.qwen.ai/api/models",
-        capabilitiesSource: "ai://models.dev/alibaba",
-      },
-    ],
-  };
-}
-
-function presetAuthMode(preset?: ProviderPreset | null): "apikey" | "oauth" {
-  return preset?.authMode === "oauth" ? "oauth" : "apikey";
-}
-
 function presetChannelAuthMode(
   preset?: ProviderPreset | null,
   channelId?: string | null,
-): "apikey" | "oauth" {
+): "api_key" | "oauth" {
   const channel = presetChannels(preset).find((item) => item.id === channelId) ?? presetChannels(preset)[0];
-  if (channel?.authMode === "oauth" || channel?.auth_mode === "oauth") return "oauth";
-  return presetAuthMode(preset);
+  return channel?.auth_mode === "oauth" ? "oauth" : "api_key";
 }
 
-function normalizeAuthMode(mode?: string | null): "apikey" | "oauth" {
-  if (!mode) return "apikey";
-  const normalized = mode.trim().toLowerCase();
-  if (normalized === "oauth") return "oauth";
-  if (normalized === "api_key") return "apikey";
-  return "apikey";
-}
-
-function sortPresetForDisplay(a: ProviderPreset, b: ProviderPreset) {
-  return a.id === DEFAULT_PRESET_ID ? -1 : b.id === DEFAULT_PRESET_ID ? 1 : 0;
+function normalizeAuthMode(mode?: string | null): "api_key" | "oauth" {
+  if (!mode) return "api_key";
+  return mode.trim().toLowerCase() === "oauth" ? "oauth" : "api_key";
 }
 
 function resolvePresetConfig(
@@ -506,10 +459,7 @@ export default function ProvidersPage() {
   });
   const { data: proxyEnabledSetting } = useQuery<string | null>({
     queryKey: ["setting", "proxy_enabled"],
-    queryFn: async () => {
-      const value = await backend<unknown>("get_setting", { key: "proxy_enabled" });
-      return typeof value === "string" ? value : null;
-    },
+    queryFn: () => backend("get_setting", { key: "proxy_enabled" }),
   });
   const providerPresets = useMemo(
     () => (providerPresetsRaw.length ? providerPresetsRaw : [fallbackProviderPreset()]),
@@ -528,31 +478,18 @@ export default function ProvidersPage() {
     const normalized = (proxyEnabledSetting ?? "").trim().toLowerCase();
     return ["1", "true", "yes", "on"].includes(normalized);
   }, [proxyEnabledSetting]);
-  const createProviderPresets = useMemo(
-    () => (
-      providerPresets.some((preset) => presetAuthMode(preset) === "oauth")
-        ? providerPresets
-        : [...providerPresets, previewOAuthPreset()]
-    ),
-    [providerPresets],
-  );
-  const createPresetOptions = useMemo(
-    () => [...createProviderPresets],
-    [createProviderPresets],
-  );
-
   const [form, setForm] = useState<CreateProvider>(emptyCreate);
   const [createEndpointRows, setCreateEndpointRows] = useState<ProtocolEndpointRow[]>([
     { protocol: "openai", base_url: "https://api.openai.com" },
   ]);
   const selectedPreset = useMemo(
-    () => createPresetOptions.find((preset) => preset.id === selectedPresetId) ?? null,
-    [createPresetOptions, selectedPresetId],
+    () => providerPresets.find((preset) => preset.id === selectedPresetId) ?? null,
+    [providerPresets, selectedPresetId],
   );
   useEffect(() => {
-    if (createPresetOptions.some((preset) => preset.id === selectedPresetId)) return;
-    setSelectedPresetId(createPresetOptions[0]?.id ?? "");
-  }, [createPresetOptions, selectedPresetId]);
+    if (providerPresets.some((preset) => preset.id === selectedPresetId)) return;
+    setSelectedPresetId(providerPresets[0]?.id ?? DEFAULT_PRESET_ID);
+  }, [providerPresets, selectedPresetId]);
 
   const [editForm, setEditForm] = useState<UpdateProvider & { id: string }>({
     id: "",
@@ -567,8 +504,7 @@ export default function ProvidersPage() {
     capabilities_source: "",
     static_models: "",
     api_key: "",
-    auth_mode: "apikey",
-    oauth_resource_url: "",
+    auth_mode: "api_key",
   });
   const [editEndpointRows, setEditEndpointRows] = useState<ProtocolEndpointRow[]>([
     { protocol: "openai", base_url: "https://api.openai.com" },
@@ -770,8 +706,7 @@ export default function ProvidersPage() {
           if (status.status === "ready") {
             setForm((prev) => ({
               ...prev,
-              base_url: normalizeOAuthResourceBaseUrl(status.resource_url, init.vendor) || prev.base_url,
-              oauth_resource_url: status.resource_url ?? prev.oauth_resource_url,
+              base_url: toGatewayBaseUrl(status.resource_url ?? "") || prev.base_url,
             }));
           }
         } catch (error) {
@@ -864,8 +799,7 @@ export default function ProvidersPage() {
       if (status.status === "ready") {
         setForm((prev) => ({
           ...prev,
-          base_url: normalizeOAuthResourceBaseUrl(status.resource_url, createOAuthSession.vendor) || prev.base_url,
-          oauth_resource_url: status.resource_url ?? prev.oauth_resource_url,
+          base_url: toGatewayBaseUrl(status.resource_url ?? "") || prev.base_url,
         }));
       }
     } catch (error) {
@@ -945,8 +879,7 @@ export default function ProvidersPage() {
       );
 
       const modelsSource = provider.models_source?.trim();
-      const staticModels = provider.static_models?.trim();
-      if (!modelsSource && !staticModels) {
+      if (!modelsSource) {
         finish(
           { success: true, latency_ms: connectivity.latency_ms, model: undefined, error: undefined },
           isZh ? "✓ 未配置模型发现源，测试完成" : "✓ Model discovery source not configured, test finished",
@@ -956,10 +889,7 @@ export default function ProvidersPage() {
       }
 
       appendTestLog("info", isZh ? "▶ 获取模型列表" : "▶ Fetch model list");
-      appendTestLog(
-        "info",
-        modelsSource ? `→ ${modelsSource}` : (isZh ? "→ 使用预置模型列表" : "→ Using preconfigured model list"),
-      );
+      appendTestLog("info", `→ ${modelsSource}`);
 
       const models = await backend<string[]>("test_provider_models", { id: provider.id });
       if (isCanceled()) return;
@@ -1024,7 +954,6 @@ export default function ProvidersPage() {
       static_models: p.static_models ?? "",
       api_key: p.api_key ?? "",
       auth_mode: normalizeAuthMode(p.auth_mode),
-      oauth_resource_url: p.oauth_resource_url ?? "",
     });
     setEditEndpointRows(endpointRows);
   }
@@ -1033,9 +962,7 @@ export default function ProvidersPage() {
     if (!nextPresetId) return;
     resetCreateOAuthState(true);
     setSelectedPresetId(nextPresetId);
-    const preset =
-      createPresetOptions.find((item) => item.id === nextPresetId)
-      ?? createProviderPresets.find((item) => item.id === nextPresetId);
+    const preset = providerPresets.find((item) => item.id === nextPresetId);
     if (!preset) return;
 
     const nextChannelId = preset.channels?.[0]?.id ?? "";
@@ -1051,7 +978,6 @@ export default function ProvidersPage() {
       base_url: nextBaseUrl,
       use_proxy: false,
       auth_mode: presetChannelAuthMode(preset, nextChannelId),
-      oauth_resource_url: "",
       preset_key: preset.id,
       channel: nextChannelId,
       models_source: config.modelsSource,
@@ -1152,7 +1078,7 @@ export default function ProvidersPage() {
   const createProtocolOptions = protocolOptions.filter((option) =>
     availableProtocolsForPreset(selectedPreset, createChannelValue).includes(option.value),
   );
-  const hasCreatePresets = createPresetOptions.length > 0;
+  const hasCreatePresets = providerPresets.length > 0;
   const createResolvedAuthMode = presetChannelAuthMode(selectedPreset, createChannelValue);
   const createOAuthReady = createOAuthStatus?.status === "ready";
   const createOAuthRequiresManualCode =
@@ -1218,12 +1144,12 @@ export default function ProvidersPage() {
             setShowForm(true);
             setShowCreateApiKey(true);
             resetCreateOAuthState(true);
-            const initialPresetId = createProviderPresets[0]?.id;
+            const initialPresetId = providerPresets[0]?.id;
             if (initialPresetId) {
               handlePresetChange(initialPresetId);
             } else {
               setSelectedPresetId("");
-              setForm({ ...emptyCreate, auth_mode: "apikey" });
+              setForm({ ...emptyCreate, auth_mode: "api_key" });
             }
           }}
           className="flex items-center gap-2"
@@ -1245,8 +1171,8 @@ export default function ProvidersPage() {
                 onValueChange={handlePresetChange}
                 className="provider-preset-group"
               >
-                {[...createPresetOptions]
-                  .sort(sortPresetForDisplay)
+                {[...providerPresets]
+                  .sort((a, b) => (a.id === DEFAULT_PRESET_ID ? -1 : b.id === DEFAULT_PRESET_ID ? 1 : 0))
                   .map((preset) => (
                     <ToggleGroupItem
                       key={preset.id}
@@ -1447,7 +1373,7 @@ export default function ProvidersPage() {
                   </div>
                 </div>
               ) : null}
-              {createResolvedAuthMode === "apikey" ? (
+              {createResolvedAuthMode === "api_key" ? (
                 <div className="space-y-2">
                   <FieldLabel>API Key</FieldLabel>
                   <div className="relative">
@@ -1664,7 +1590,7 @@ export default function ProvidersPage() {
                     createMut.isPending
                     || createOAuthMut.isPending
                     || !form.name.trim()
-                    || (createResolvedAuthMode === "apikey" && !form.api_key)
+                    || (createResolvedAuthMode === "api_key" && !form.api_key)
                     || (createResolvedAuthMode === "oauth" && !createOAuthReady)
                   }
                 >
