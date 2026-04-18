@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod admin;
 pub mod cache;
 pub mod config;
@@ -184,6 +185,19 @@ impl Gateway {
             let http_client = gw.http_client.clone();
             tokio::spawn(async move {
                 admin::refresh_models_dev_runtime_cache_on_startup(data_dir, http_client).await;
+            });
+        }
+
+        {
+            let gw_refresh = gw.clone();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(120));
+                loop {
+                    interval.tick().await;
+                    if let Err(error) = gw_refresh.admin().refresh_oauth_bindings().await {
+                        tracing::warn!("background oauth refresh skipped: {error}");
+                    }
+                }
             });
         }
 

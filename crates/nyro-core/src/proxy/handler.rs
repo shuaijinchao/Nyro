@@ -11,6 +11,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use futures::StreamExt;
 use dashmap::mapref::entry::Entry as DashEntry;
+use reqwest::header::{HeaderMap as ReqwestHeaderMap, HeaderValue as ReqwestHeaderValue};
 use serde_json::Value;
 use tokio::sync::broadcast;
 use tokio::time::{Duration, timeout};
@@ -103,7 +104,20 @@ pub async fn embeddings_proxy(
             Ok(p) => p,
             Err(_) => continue,
         };
-        let Some(openai_base_url) = resolve_openai_base_url(&provider) else {
+        let provider_runtime = match gw.admin().resolve_provider_runtime(&provider).await {
+            Ok(runtime) => runtime,
+            Err(e) => {
+                last_error = Some(error_response(502, &format!("provider credential error: {e}")));
+                continue;
+            }
+        };
+        let openai_base_url = provider_runtime
+            .binding
+            .base_url_override
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| resolve_openai_base_url(&provider));
+        let Some(openai_base_url) = openai_base_url else {
             last_error = Some(error_response(
                 400,
                 &format!(
@@ -122,6 +136,7 @@ pub async fn embeddings_proxy(
             obj.insert("model".into(), Value::String(actual_model.clone()));
         }
         let adapter = adapter::get_adapter(&provider, Protocol::OpenAI);
+        let credential = provider_runtime.access_token.clone();
         let client = match gw.http_client_for_provider(provider.use_proxy).await {
             Ok(http_client) => ProxyClient::new(http_client),
             Err(e) => {
@@ -134,9 +149,15 @@ pub async fn embeddings_proxy(
                 adapter.as_ref(),
                 &openai_base_url,
                 "/v1/embeddings",
-                &provider.api_key,
+                &credential,
                 body.clone(),
-                reqwest::header::HeaderMap::new(),
+                match runtime_binding_headers(&provider_runtime.binding) {
+                    Ok(headers) => headers,
+                    Err(e) => {
+                        last_error = Some(error_response(502, &format!("provider runtime binding error: {e}")));
+                        continue;
+                    }
+                },
             )
             .await;
         match call {
@@ -529,10 +550,24 @@ async fn proxy_pipeline(
             &mut internal_for_target,
         );
 
+        let provider_runtime = match gw.admin().resolve_provider_runtime(&provider).await {
+            Ok(runtime) => runtime,
+            Err(e) => {
+                last_response = Some(error_response(502, &format!("provider credential error: {e}")));
+                continue;
+            }
+        };
         let provider_protocols = ProviderProtocols::from_provider(&provider);
         let resolved = provider_protocols.resolve_egress(ingress);
         let egress = resolved.protocol;
-        let egress_base_url = if resolved.base_url.is_empty() {
+        let egress_base_url = if let Some(base_url_override) = provider_runtime
+            .binding
+            .base_url_override
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+        {
+            base_url_override
+        } else if resolved.base_url.is_empty() {
             provider.base_url.clone()
         } else {
             resolved.base_url
@@ -554,13 +589,7 @@ async fn proxy_pipeline(
         
         let egress_body = override_model(egress_body, &actual_model, egress);
         let egress_path = encoder.egress_path(&actual_model, is_stream);
-        let credential = match resolve_provider_credential(&gw, &provider).await {
-            Ok(value) => value,
-            Err(e) => {
-                last_response = Some(error_response(502, &format!("provider credential error: {e}")));
-                continue;
-            }
-        };
+        let credential = provider_runtime.access_token.clone();
         let client = match gw.http_client_for_provider(provider.use_proxy).await {
             Ok(http_client) => ProxyClient::new(http_client),
             Err(e) => {
@@ -569,8 +598,14 @@ async fn proxy_pipeline(
                 continue;
             }
         };
-        let mut forward_headers = adapter.auth_headers(&credential);
-        forward_headers.extend(extra_headers.clone());
+        let mut request_headers = match runtime_binding_headers(&provider_runtime.binding) {
+            Ok(headers) => headers,
+            Err(e) => {
+                last_response = Some(error_response(502, &format!("provider runtime binding error: {e}")));
+                continue;
+            }
+        };
+        request_headers.extend(extra_headers.clone());
         let egress_str = egress.to_string();
 
         let miss_expose_headers =
@@ -587,7 +622,7 @@ async fn proxy_pipeline(
                 &egress_path,
                 &credential,
                 egress_body,
-                extra_headers,
+                request_headers.clone(),
                 &ingress_str,
                 &egress_str,
                 &request_model,
@@ -615,7 +650,7 @@ async fn proxy_pipeline(
                 &egress_path,
                 &credential,
                 egress_body,
-                extra_headers,
+                request_headers,
                 &ingress_str,
                 &egress_str,
                 &request_model,
@@ -1303,7 +1338,17 @@ async fn compute_embedding(gw: &Gateway, text: &str) -> anyhow::Result<Vec<f32>>
             Ok(provider) => provider,
             Err(_) => continue,
         };
-        let Some(openai_base_url) = resolve_openai_base_url(&provider) else {
+        let provider_runtime = match gw.admin().resolve_provider_runtime(&provider).await {
+            Ok(runtime) => runtime,
+            Err(_) => continue,
+        };
+        let openai_base_url = provider_runtime
+            .binding
+            .base_url_override
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| resolve_openai_base_url(&provider));
+        let Some(openai_base_url) = openai_base_url else {
             missing_openai_endpoint = true;
             continue;
         };
@@ -1313,10 +1358,7 @@ async fn compute_embedding(gw: &Gateway, text: &str) -> anyhow::Result<Vec<f32>>
             target.model.clone()
         };
         let adapter = adapter::get_adapter(&provider, Protocol::OpenAI);
-        let credential = match resolve_provider_credential(gw, &provider).await {
-            Ok(value) => value,
-            Err(_) => continue,
-        };
+        let credential = provider_runtime.access_token.clone();
         let client = match gw.http_client_for_provider(provider.use_proxy).await {
             Ok(http_client) => ProxyClient::new(http_client),
             Err(_) => continue,
@@ -1332,7 +1374,10 @@ async fn compute_embedding(gw: &Gateway, text: &str) -> anyhow::Result<Vec<f32>>
                 "/v1/embeddings",
                 &credential,
                 request_body,
-                reqwest::header::HeaderMap::new(),
+                match runtime_binding_headers(&provider_runtime.binding) {
+                    Ok(headers) => headers,
+                    Err(_) => continue,
+                },
             )
             .await
         {
@@ -1781,9 +1826,15 @@ fn ensure_tool_index(tool_calls: &mut Vec<Option<ToolCall>>, index: usize) {
     }
 }
 
-async fn resolve_provider_credential(gw: &Gateway, provider: &Provider) -> anyhow::Result<String> {
-    let _ = gw;
-    Ok(provider.api_key.clone())
+fn runtime_binding_headers(binding: &crate::auth::RuntimeBinding) -> anyhow::Result<ReqwestHeaderMap> {
+    let mut headers = ReqwestHeaderMap::new();
+    for (key, value) in &binding.extra_headers {
+        headers.insert(
+            reqwest::header::HeaderName::from_bytes(key.as_bytes())?,
+            ReqwestHeaderValue::from_str(value)?,
+        );
+    }
+    Ok(headers)
 }
 
 fn emit_log(

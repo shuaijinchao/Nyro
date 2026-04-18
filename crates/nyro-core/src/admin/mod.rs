@@ -1,18 +1,27 @@
 use anyhow::Context;
+use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
+use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::Gateway;
+use crate::auth;
+use crate::auth::types::{
+    AuthBindingStatus, AuthPollState, AuthScheme, AuthSession, AuthSessionInitData,
+    AuthSessionStatus, AuthSessionStatusData, CredentialBundle, ExchangeAuthContext,
+    RefreshAuthContext, RuntimeBinding, StartAuthContext, StoredCredential, UpdateAuthSession,
+    UpsertProviderAuthBinding,
+};
 use crate::db::models::*;
 use crate::protocol::{Protocol, ProviderProtocols};
 use crate::proxy::adapter;
 use crate::proxy::client::ProxyClient;
 use crate::router::TargetSelector;
 use crate::storage::traits::ProviderTestResult;
-use crate::Gateway;
 
 const MODELS_DEV_SNAPSHOT: &str = include_str!("../../assets/models.dev.json");
 const PROVIDER_PRESETS_SNAPSHOT: &str = include_str!("../../assets/providers.json");
@@ -20,9 +29,43 @@ const MODELS_DEV_RUNTIME_FILE: &str = "models.dev.json";
 const MODELS_DEV_SOURCE_URL: &str = "https://models.dev/api.json";
 const MODELS_DEV_RUNTIME_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
+#[derive(Debug, Deserialize)]
+struct ProviderPresetSnapshot {
+    id: String,
+    #[serde(default)]
+    channels: Vec<ProviderChannelPresetSnapshot>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProviderChannelPresetSnapshot {
+    id: String,
+    #[serde(default = "default_provider_auth_mode")]
+    auth_mode: String,
+}
+
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProviderOAuthStatusData {
+    pub provider_id: String,
+    pub provider_name: String,
+    pub driver_key: String,
+    pub status: String,
+    pub expires_at: Option<String>,
+    pub resource_url: Option<String>,
+    pub subject_id: Option<String>,
+    pub last_error: Option<String>,
+    pub updated_at: Option<String>,
+    pub has_refresh_token: bool,
+}
+
 #[derive(Clone)]
 pub struct AdminService {
     gw: Gateway,
+}
+
+pub(crate) struct ResolvedProviderRuntime {
+    pub access_token: String,
+    pub binding: RuntimeBinding,
 }
 
 impl AdminService {
@@ -49,10 +92,515 @@ impl AdminService {
             .ok_or_else(|| anyhow::anyhow!("provider not found: {id}"))
     }
 
+    pub async fn init_oauth_session(
+        &self,
+        vendor: &str,
+        use_proxy: bool,
+    ) -> anyhow::Result<AuthSessionInitData> {
+        let driver_key = auth::normalize_driver_key(vendor);
+        if driver_key.is_empty() {
+            anyhow::bail!("auth vendor cannot be empty");
+        }
+        let driver = auth::build_driver(&driver_key)
+            .ok_or_else(|| anyhow::anyhow!("auth vendor not implemented: {driver_key}"))?;
+        let client = self.gw.http_client_for_provider(use_proxy).await?;
+        let created = driver
+            .start(StartAuthContext {
+                use_proxy,
+                http_client: Some(client),
+                ..Default::default()
+            })
+            .await?;
+        let session = self.create_auth_session_record(created).await?;
+        build_auth_session_init_data(&session)
+    }
+
+    pub async fn get_oauth_session_status(
+        &self,
+        session_id: &str,
+    ) -> anyhow::Result<AuthSessionStatusData> {
+        let session = self
+            .get_auth_session_record(session_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("auth session not found: {session_id}"))?;
+
+        match session.status.as_str() {
+            "ready" => {
+                let bundle = parse_auth_session_bundle(&session)?;
+                return Ok(build_auth_session_ready_data(&session, &bundle));
+            }
+            "error" => {
+                return Ok(AuthSessionStatusData::Error {
+                    code: "AUTH_SESSION_ERROR".to_string(),
+                    message: session
+                        .last_error
+                        .filter(|value| !value.trim().is_empty())
+                        .unwrap_or_else(|| "auth session failed".to_string()),
+                });
+            }
+            "cancelled" => {
+                return Ok(AuthSessionStatusData::Error {
+                    code: "AUTH_SESSION_CANCELLED".to_string(),
+                    message: "auth session cancelled".to_string(),
+                });
+            }
+            _ => {}
+        }
+
+        if is_expired_at(session.expires_at.as_deref()) {
+            let updated = self
+                .update_auth_session_record(
+                    &session.id,
+                    UpdateAuthSession {
+                        status: Some(AuthSessionStatus::Error.as_str().to_string()),
+                        last_error: Some("auth session expired".to_string()),
+                        ..Default::default()
+                    },
+                )
+                .await?;
+            return Ok(AuthSessionStatusData::Error {
+                code: "AUTH_TIMEOUT".to_string(),
+                message: updated
+                    .last_error
+                    .unwrap_or_else(|| "auth session expired".to_string()),
+            });
+        }
+
+        if session.scheme == AuthScheme::OAuthAuthCodePkce.as_str()
+            || session.scheme == AuthScheme::SetupToken.as_str()
+        {
+            return Ok(build_auth_session_pending_data(&session));
+        }
+
+        let driver = auth::build_driver(&session.driver_key).ok_or_else(|| {
+            anyhow::anyhow!("auth vendor not implemented: {}", session.driver_key)
+        })?;
+        let client = self.gw.http_client_for_provider(session.use_proxy).await?;
+
+        match driver
+            .poll(
+                &session,
+                RefreshAuthContext {
+                    use_proxy: session.use_proxy,
+                    http_client: Some(client),
+                    ..Default::default()
+                },
+            )
+            .await?
+        {
+            AuthPollState::Pending(progress) => {
+                let updated = self
+                    .update_auth_session_record(
+                        &session.id,
+                        UpdateAuthSession {
+                            user_code: progress.user_code,
+                            verification_uri: progress.verification_uri,
+                            verification_uri_complete: progress.verification_uri_complete,
+                            expires_at: progress.expires_at,
+                            poll_interval_seconds: progress.poll_interval_seconds,
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+                Ok(build_auth_session_pending_data(&updated))
+            }
+            AuthPollState::Ready(bundle) => {
+                let updated = self
+                    .update_auth_session_record(
+                        &session.id,
+                        UpdateAuthSession {
+                            status: Some(AuthSessionStatus::Ready.as_str().to_string()),
+                            result_json: Some(serde_json::to_string(&bundle)?),
+                            expires_at: bundle.expires_at.clone(),
+                            last_error: Some(String::new()),
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+                Ok(build_auth_session_ready_data(&updated, &bundle))
+            }
+            AuthPollState::Error { code, message } => {
+                let updated = self
+                    .update_auth_session_record(
+                        &session.id,
+                        UpdateAuthSession {
+                            status: Some(AuthSessionStatus::Error.as_str().to_string()),
+                            last_error: Some(format!("{code}: {message}")),
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+                Ok(AuthSessionStatusData::Error {
+                    code,
+                    message: updated.last_error.unwrap_or(message),
+                })
+            }
+        }
+    }
+
+    pub async fn cancel_oauth_session(&self, session_id: &str) -> anyhow::Result<()> {
+        self.delete_auth_session_record(session_id).await
+    }
+
+    pub async fn complete_oauth_session(
+        &self,
+        session_id: &str,
+        input: auth::AuthExchangeInput,
+    ) -> anyhow::Result<AuthSessionStatusData> {
+        let session = self
+            .get_auth_session_record(session_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("auth session not found: {session_id}"))?;
+        if !session
+            .status
+            .eq_ignore_ascii_case(AuthSessionStatus::Pending.as_str())
+        {
+            anyhow::bail!("auth session is not pending");
+        }
+
+        let driver = auth::build_driver(&session.driver_key).ok_or_else(|| {
+            anyhow::anyhow!("auth vendor not implemented: {}", session.driver_key)
+        })?;
+
+        let client = self.gw.http_client_for_provider(session.use_proxy).await?;
+        let bundle = driver
+            .exchange(
+                &session,
+                input,
+                ExchangeAuthContext {
+                    use_proxy: session.use_proxy,
+                    http_client: Some(client),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        let updated = self
+            .update_auth_session_record(
+                &session.id,
+                UpdateAuthSession {
+                    status: Some(AuthSessionStatus::Ready.as_str().to_string()),
+                    result_json: Some(serde_json::to_string(&bundle)?),
+                    expires_at: bundle.expires_at.clone(),
+                    last_error: Some(String::new()),
+                    ..Default::default()
+                },
+            )
+            .await?;
+
+        Ok(build_auth_session_ready_data(&updated, &bundle))
+    }
+
+    pub async fn create_provider_with_oauth_session(
+        &self,
+        session_id: &str,
+        mut input: CreateProvider,
+    ) -> anyhow::Result<Provider> {
+        let session = self
+            .get_auth_session_record(session_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("auth session not found: {session_id}"))?;
+        if !session
+            .status
+            .eq_ignore_ascii_case(AuthSessionStatus::Ready.as_str())
+        {
+            anyhow::bail!("auth session is not ready");
+        }
+
+        let bundle = parse_auth_session_bundle(&session)?;
+        let access_token = bundle
+            .access_token
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| anyhow::anyhow!("auth session missing access token"))?;
+
+        if input.vendor.as_deref().unwrap_or("").trim().is_empty() {
+            input.vendor = Some(session.driver_key.clone());
+        }
+        input.api_key = access_token.clone();
+        input.auth_mode = "oauth".to_string();
+
+        let provider = self.create_provider(input).await?;
+        let provisioned = async {
+            let binding = self
+                .persist_provider_auth_binding(&provider, &session, &bundle)
+                .await?;
+            self.sync_provider_runtime_fields(&provider, &binding.stored_credential())
+                .await
+        }
+        .await;
+
+        let provider = match provisioned {
+            Ok(provider) => provider,
+            Err(error) => {
+                if let Err(cleanup_error) = self.delete_provider(&provider.id).await {
+                    tracing::warn!(
+                        "failed to rollback oauth provider {} after provisioning error: {}",
+                        provider.id,
+                        cleanup_error
+                    );
+                }
+                return Err(error.context("create oauth provider"));
+            }
+        };
+
+        self.delete_auth_session_record(session_id).await?;
+        Ok(provider)
+    }
+
+    pub async fn get_provider_oauth_status(
+        &self,
+        id: &str,
+    ) -> anyhow::Result<ProviderOAuthStatusData> {
+        let provider = self.get_provider(id).await?;
+        let driver_key = provider
+            .vendor
+            .as_deref()
+            .map(auth::normalize_driver_key)
+            .unwrap_or_default();
+
+        if driver_key.is_empty() {
+            return Ok(build_provider_oauth_status(&provider, "", None, None));
+        }
+
+        let unavailable = auth::build_driver(&driver_key).is_none();
+        let binding = self
+            .get_provider_auth_binding_record(&provider.id, &driver_key)
+            .await?;
+        let reason = if unavailable {
+            Some(format!("auth vendor not implemented: {driver_key}"))
+        } else {
+            None
+        };
+        Ok(build_provider_oauth_status(
+            &provider,
+            &driver_key,
+            binding.as_ref(),
+            reason,
+        ))
+    }
+
+    pub async fn reconnect_provider_oauth(
+        &self,
+        id: &str,
+    ) -> anyhow::Result<ProviderOAuthStatusData> {
+        let provider = self.get_provider(id).await?;
+        let driver_key = provider
+            .vendor
+            .as_deref()
+            .map(auth::normalize_driver_key)
+            .unwrap_or_default();
+
+        if driver_key.is_empty() {
+            anyhow::bail!("provider vendor is empty");
+        }
+        let driver = auth::build_driver(&driver_key)
+            .ok_or_else(|| anyhow::anyhow!("auth vendor not implemented: {driver_key}"))?;
+        if !driver.metadata().supports_existing_provider {
+            anyhow::bail!("auth vendor does not support reconnect: {driver_key}");
+        }
+
+        let binding = self
+            .get_provider_auth_binding_record(&provider.id, &driver_key)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("provider oauth binding not found"))?;
+
+        let credential = binding.stored_credential();
+        let refresh_token = credential
+            .refresh_token
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if refresh_token.is_empty() {
+            anyhow::bail!("provider oauth binding missing refresh token");
+        }
+
+        let client = self.gw.http_client_for_provider(provider.use_proxy).await?;
+        let bundle = match driver
+            .refresh(
+                &credential,
+                RefreshAuthContext {
+                    use_proxy: provider.use_proxy,
+                    http_client: Some(client),
+                    ..Default::default()
+                },
+            )
+            .await
+        {
+            Ok(bundle) => bundle,
+            Err(error) => {
+                let failed = self
+                    .upsert_provider_auth_binding_record(UpsertProviderAuthBinding {
+                        provider_id: provider.id.clone(),
+                        driver_key: binding.driver_key.clone(),
+                        scheme: binding.scheme.clone(),
+                        status: AuthBindingStatus::Error.as_str().to_string(),
+                        access_token: binding.access_token.clone(),
+                        refresh_token: binding.refresh_token.clone(),
+                        expires_at: binding.expires_at.clone(),
+                        resource_url: binding.resource_url.clone(),
+                        subject_id: binding.subject_id.clone(),
+                        scopes_json: binding.scopes_json.clone(),
+                        meta_json: binding.meta_json.clone(),
+                        last_error: Some(error.to_string()),
+                    })
+                    .await?;
+                return Ok(build_provider_oauth_status(
+                    &provider,
+                    &driver_key,
+                    Some(&failed),
+                    None,
+                ));
+            }
+        };
+
+        let refreshed_binding = self
+            .upsert_provider_auth_binding_record(UpsertProviderAuthBinding {
+                provider_id: provider.id.clone(),
+                driver_key: binding.driver_key.clone(),
+                scheme: binding.scheme.clone(),
+                status: AuthBindingStatus::Connected.as_str().to_string(),
+                access_token: bundle.access_token.clone(),
+                refresh_token: bundle.refresh_token.clone(),
+                expires_at: bundle.expires_at.clone(),
+                resource_url: bundle.resource_url.clone(),
+                subject_id: bundle.subject_id.clone(),
+                scopes_json: Some(serde_json::to_string(&bundle.scopes)?),
+                meta_json: Some(serde_json::to_string(&bundle.raw)?),
+                last_error: None,
+            })
+            .await?;
+
+        self.sync_provider_runtime_fields(&provider, &refreshed_binding.stored_credential())
+            .await?;
+
+        Ok(build_provider_oauth_status(
+            &provider,
+            &driver_key,
+            Some(&refreshed_binding),
+            None,
+        ))
+    }
+
+    pub async fn logout_provider_oauth(
+        &self,
+        id: &str,
+    ) -> anyhow::Result<ProviderOAuthStatusData> {
+        let provider = self.get_provider(id).await?;
+        let driver_key = provider
+            .vendor
+            .as_deref()
+            .map(auth::normalize_driver_key)
+            .unwrap_or_default();
+
+        if driver_key.is_empty() {
+            return Ok(build_provider_oauth_status(&provider, "", None, None));
+        }
+
+        let disconnected = if let Some(existing) = self
+            .get_provider_auth_binding_record(&provider.id, &driver_key)
+            .await?
+        {
+            Some(
+                self.upsert_provider_auth_binding_record(UpsertProviderAuthBinding {
+                    provider_id: existing.provider_id.clone(),
+                    driver_key: existing.driver_key.clone(),
+                    scheme: existing.scheme.clone(),
+                    status: AuthBindingStatus::Disconnected.as_str().to_string(),
+                    access_token: existing.access_token.clone(),
+                    refresh_token: existing.refresh_token.clone(),
+                    expires_at: existing.expires_at.clone(),
+                    resource_url: existing.resource_url.clone(),
+                    subject_id: existing.subject_id.clone(),
+                    scopes_json: existing.scopes_json.clone(),
+                    meta_json: existing.meta_json.clone(),
+                    last_error: None,
+                })
+                .await?,
+            )
+        } else {
+            None
+        };
+
+        self.gw
+            .storage
+            .providers()
+            .update(
+                &provider.id,
+                UpdateProvider {
+                    auth_mode: Some("api_key".to_string()),
+                    api_key: Some(String::new()),
+                    access_token: Some(String::new()),
+                    refresh_token: Some(String::new()),
+                    expires_at: Some(String::new()),
+                    ..Default::default()
+                },
+            )
+            .await?;
+
+        Ok(build_provider_oauth_status(
+            &provider,
+            &driver_key,
+            disconnected.as_ref(),
+            None,
+        ))
+    }
+
+    pub async fn bind_provider_with_oauth_session(
+        &self,
+        provider_id: &str,
+        session_id: &str,
+    ) -> anyhow::Result<Provider> {
+        let provider = self.get_provider(provider_id).await?;
+        let session = self
+            .get_auth_session_record(session_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("auth session not found: {session_id}"))?;
+        if !session
+            .status
+            .eq_ignore_ascii_case(AuthSessionStatus::Ready.as_str())
+        {
+            anyhow::bail!("auth session is not ready");
+        }
+
+        let bundle = parse_auth_session_bundle(&session)?;
+        bundle
+            .access_token
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| anyhow::anyhow!("auth session missing access token"))?;
+
+        let binding = self
+            .persist_provider_auth_binding(&provider, &session, &bundle)
+            .await?;
+        let provider = self
+            .sync_provider_runtime_fields(&provider, &binding.stored_credential())
+            .await?;
+        self.gw
+            .storage
+            .providers()
+            .update(
+                &provider.id,
+                UpdateProvider {
+                    auth_mode: Some("oauth".to_string()),
+                    ..Default::default()
+                },
+            )
+            .await?;
+
+        self.delete_auth_session_record(session_id).await?;
+        self.get_provider(provider_id).await
+    }
+
     pub async fn create_provider(&self, input: CreateProvider) -> anyhow::Result<Provider> {
         let name = normalize_name(&input.name, "provider name")?;
         self.ensure_provider_name_unique(None, &name).await?;
         let vendor = normalize_vendor(input.vendor.as_deref());
+        let auth_mode = resolve_preset_channel_auth_mode(
+            input.preset_key.as_deref(),
+            input.channel.as_deref(),
+        )
+        .unwrap_or(input.auth_mode);
         self.gw
             .storage
             .providers()
@@ -69,6 +617,10 @@ impl AdminService {
                 capabilities_source: input.capabilities_source,
                 static_models: input.static_models,
                 api_key: input.api_key,
+                auth_mode,
+                access_token: input.access_token,
+                refresh_token: input.refresh_token,
+                expires_at: input.expires_at,
                 use_proxy: input.use_proxy,
             })
             .await
@@ -81,9 +633,7 @@ impl AdminService {
     ) -> anyhow::Result<Provider> {
         let current = self.get_provider(id).await?;
         let current_base_url = current.base_url.clone();
-        let models_source_input = input
-            .effective_models_source()
-            .map(ToString::to_string);
+        let models_source_input = input.effective_models_source().map(ToString::to_string);
 
         let name = normalize_name(&input.name.unwrap_or(current.name), "provider name")?;
         self.ensure_provider_name_unique(Some(id), &name).await?;
@@ -93,21 +643,20 @@ impl AdminService {
             normalize_vendor(current.vendor.as_deref())
         };
         let models_source = models_source_input
-            .or_else(|| {
-                current
-                    .models_source
-                    .as_deref()
-                    .map(ToString::to_string)
-            });
+            .or_else(|| current.models_source.as_deref().map(ToString::to_string));
         let protocol = input.protocol.unwrap_or(current.protocol);
         let base_url = input.base_url.unwrap_or(current.base_url);
         let preset_key = input.preset_key.or(current.preset_key);
         let channel = input.channel.or(current.channel);
-        let capabilities_source = input
-            .capabilities_source
-            .or(current.capabilities_source);
+        let capabilities_source = input.capabilities_source.or(current.capabilities_source);
         let static_models = input.static_models.or(current.static_models);
         let api_key = input.api_key.unwrap_or(current.api_key);
+        let auth_mode = resolve_preset_channel_auth_mode(preset_key.as_deref(), channel.as_deref())
+            .or(input.auth_mode)
+            .unwrap_or(current.auth_mode);
+        let access_token = input.access_token.or(current.access_token);
+        let refresh_token = input.refresh_token.or(current.refresh_token);
+        let expires_at = input.expires_at.or(current.expires_at);
         let use_proxy = input.use_proxy.unwrap_or(current.use_proxy);
         let is_enabled = input.is_enabled.unwrap_or(current.is_enabled);
         let base_url_changed = base_url != current_base_url;
@@ -131,6 +680,10 @@ impl AdminService {
                     capabilities_source,
                     static_models,
                     api_key: Some(api_key),
+                    auth_mode: Some(auth_mode),
+                    access_token,
+                    refresh_token,
+                    expires_at,
                     use_proxy: Some(use_proxy),
                     is_enabled: Some(is_enabled),
                 },
@@ -192,7 +745,9 @@ impl AdminService {
                 {
                     // Any HTTP response means the endpoint is reachable, including 4xx.
                     Ok(_) => {}
-                    Err(e) => failures.push(format!("{protocol}: {}", format_connectivity_error(&e))),
+                    Err(e) => {
+                        failures.push(format!("{protocol}: {}", format_connectivity_error(&e)))
+                    }
                 }
             }
 
@@ -215,7 +770,8 @@ impl AdminService {
                 }
             }
         };
-        self.record_provider_test_result(&provider.id, &result).await?;
+        self.record_provider_test_result(&provider.id, &result)
+            .await?;
         Ok(result)
     }
 
@@ -239,12 +795,16 @@ impl AdminService {
 
     pub async fn test_provider_models(&self, id: &str) -> anyhow::Result<Vec<String>> {
         let provider = self.get_provider(id).await?;
-        let endpoint = provider
-            .effective_models_source()
-            .map(str::trim)
+        let runtime = self.resolve_provider_runtime(&provider).await?;
+        let credential = runtime.access_token.clone();
+        let endpoint = runtime
+            .binding
+            .models_source_override
+            .clone()
+            .or_else(|| provider.effective_models_source().map(ToString::to_string))
+            .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
-            .ok_or_else(|| anyhow::anyhow!("Model Discovery URL is empty"))?
-            .to_string();
+            .ok_or_else(|| anyhow::anyhow!("Model Discovery URL is empty"))?;
 
         if let Some(models) = lookup_models_dev_models(&self.gw.config.data_dir, &endpoint)? {
             if models.is_empty() {
@@ -253,32 +813,34 @@ impl AdminService {
             return Ok(models);
         }
 
-        let mut request = self
-            .gw
-            .http_client
-            .get(&endpoint)
-            .headers(build_model_headers(
-                &provider.protocol,
-                provider.vendor.as_deref(),
-                &provider.api_key,
-            )?)
-            .timeout(Duration::from_secs(10));
+        let mut headers = build_model_headers(
+            &provider.protocol,
+            provider.vendor.as_deref(),
+            &credential,
+        )?;
+        headers.extend(runtime_binding_headers(&runtime.binding)?);
+        let mut request = self.gw.http_client.get(&endpoint).headers(headers).timeout(Duration::from_secs(10));
 
         if provider.protocol == "gemini" {
             let separator = if endpoint.contains('?') { '&' } else { '?' };
+            let mut headers = build_model_headers(
+                &provider.protocol,
+                provider.vendor.as_deref(),
+                &credential,
+            )?;
+            headers.extend(runtime_binding_headers(&runtime.binding)?);
             request = self
                 .gw
                 .http_client
-                .get(format!("{endpoint}{separator}key={}", provider.api_key))
-                .headers(build_model_headers(
-                    &provider.protocol,
-                    provider.vendor.as_deref(),
-                    &provider.api_key,
-                )?)
+                .get(format!("{endpoint}{separator}key={}", credential))
+                .headers(headers)
                 .timeout(Duration::from_secs(10));
         }
 
-        let resp = request.send().await.map_err(|e| anyhow::anyhow!(format_connectivity_error(&e)))?;
+        let resp = request
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!(format_connectivity_error(&e)))?;
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
@@ -287,7 +849,8 @@ impl AdminService {
         }
 
         let json: Value = resp.json().await.unwrap_or_default();
-        let models = extract_models_from_response(&provider.protocol, provider.vendor.as_deref(), &json);
+        let models =
+            extract_models_from_response(&provider.protocol, provider.vendor.as_deref(), &json);
         if models.is_empty() {
             anyhow::bail!("Model list format is invalid or empty");
         }
@@ -297,35 +860,42 @@ impl AdminService {
 
     pub async fn get_provider_models(&self, id: &str) -> anyhow::Result<Vec<String>> {
         let provider = self.get_provider(id).await?;
+        let runtime = self.resolve_provider_runtime(&provider).await?;
+        let credential = runtime.access_token.clone();
 
-        if let Some(endpoint) = resolve_models_endpoint(&provider) {
+        if let Some(endpoint) = runtime
+            .binding
+            .models_source_override
+            .clone()
+            .or_else(|| resolve_models_endpoint(&provider))
+        {
             if let Some(models) = lookup_models_dev_models(&self.gw.config.data_dir, &endpoint)? {
                 if !models.is_empty() {
                     return Ok(models);
                 }
             }
 
-            let mut request = self
-                .gw
-                .http_client
-                .get(&endpoint)
-                .headers(build_model_headers(
-                    &provider.protocol,
-                    provider.vendor.as_deref(),
-                    &provider.api_key,
-                )?);
+            let mut headers = build_model_headers(
+                &provider.protocol,
+                provider.vendor.as_deref(),
+                &credential,
+            )?;
+            headers.extend(runtime_binding_headers(&runtime.binding)?);
+            let mut request = self.gw.http_client.get(&endpoint).headers(headers);
 
             if provider.protocol == "gemini" {
                 let separator = if endpoint.contains('?') { '&' } else { '?' };
+                let mut headers = build_model_headers(
+                    &provider.protocol,
+                    provider.vendor.as_deref(),
+                    &credential,
+                )?;
+                headers.extend(runtime_binding_headers(&runtime.binding)?);
                 request = self
                     .gw
                     .http_client
-                    .get(format!("{endpoint}{separator}key={}", provider.api_key))
-                    .headers(build_model_headers(
-                        &provider.protocol,
-                        provider.vendor.as_deref(),
-                        &provider.api_key,
-                    )?);
+                    .get(format!("{endpoint}{separator}key={}", credential))
+                    .headers(headers);
             }
 
             if let Ok(resp) = request.send().await {
@@ -356,7 +926,8 @@ impl AdminService {
         if trimmed_model.is_empty() {
             anyhow::bail!("model cannot be empty");
         }
-        self.resolve_provider_model_capabilities(&provider, trimmed_model).await
+        self.resolve_provider_model_capabilities(&provider, trimmed_model)
+            .await
     }
 
     pub async fn detect_embedding_dimensions(&self, embedding_route: &str) -> anyhow::Result<u64> {
@@ -396,6 +967,10 @@ impl AdminService {
                 target.model.clone()
             };
             let adapter = adapter::get_adapter(&provider, Protocol::OpenAI);
+            let credential = match resolve_provider_credential(&provider) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
             let client = match self.gw.http_client_for_provider(provider.use_proxy).await {
                 Ok(http_client) => ProxyClient::new(http_client),
                 Err(_) => continue,
@@ -405,7 +980,7 @@ impl AdminService {
                     adapter.as_ref(),
                     &openai_base_url,
                     "/v1/embeddings",
-                    &provider.api_key,
+                    &credential,
                     serde_json::json!({
                         "model": actual_model,
                         "input": "nyro.embedding.dimensions.probe",
@@ -442,8 +1017,11 @@ impl AdminService {
 
         match parse_source(source) {
             ResolvedSource::ModelsDev(vendor_key) => {
-                let matched = lookup_models_dev_capability(&self.gw.config.data_dir, vendor_key, model);
-                matched.ok_or_else(|| anyhow::anyhow!("no matched model capabilities found in models.dev"))
+                let matched =
+                    lookup_models_dev_capability(&self.gw.config.data_dir, vendor_key, model);
+                matched.ok_or_else(|| {
+                    anyhow::anyhow!("no matched model capabilities found in models.dev")
+                })
             }
             ResolvedSource::Http(url) => {
                 if is_ollama_show_endpoint(url) {
@@ -452,10 +1030,10 @@ impl AdminService {
                     self.query_http_capability(provider, url, model).await
                 }
             }
-            ResolvedSource::Auto => Ok(
-                fuzzy_match_models_dev(&self.gw.config.data_dir, model)
-                    .ok_or_else(|| anyhow::anyhow!("no matched model capabilities found in auto mode"))?,
-            ),
+            ResolvedSource::Auto => Ok(fuzzy_match_models_dev(&self.gw.config.data_dir, model)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("no matched model capabilities found in auto mode")
+                })?),
         }
     }
 
@@ -465,6 +1043,7 @@ impl AdminService {
         url: &str,
         model: &str,
     ) -> anyhow::Result<ModelCapabilities> {
+        let credential = resolve_provider_credential(provider)?;
         let mut request = self
             .gw
             .http_client
@@ -472,7 +1051,7 @@ impl AdminService {
             .headers(build_model_headers(
                 &provider.protocol,
                 provider.vendor.as_deref(),
-                &provider.api_key,
+                &credential,
             )?)
             .timeout(Duration::from_secs(10));
 
@@ -481,11 +1060,11 @@ impl AdminService {
             request = self
                 .gw
                 .http_client
-                .get(format!("{url}{separator}key={}", provider.api_key))
+                .get(format!("{url}{separator}key={}", credential))
                 .headers(build_model_headers(
                     &provider.protocol,
                     provider.vendor.as_deref(),
-                    &provider.api_key,
+                    &credential,
                 )?)
                 .timeout(Duration::from_secs(10));
         }
@@ -546,8 +1125,7 @@ impl AdminService {
         let name = normalize_name(&input.name, "route name")?;
         self.ensure_route_name_unique(None, &name).await?;
         ensure_virtual_model(&input.virtual_model)?;
-        self.ensure_route_unique(None, &input.virtual_model)
-            .await?;
+        self.ensure_route_unique(None, &input.virtual_model).await?;
         let strategy = normalize_route_strategy(input.strategy.as_deref())?;
         let route_type = normalize_route_type(input.route_type.as_deref(), "chat")?;
         let targets = normalize_create_route_targets(&input)?;
@@ -602,7 +1180,8 @@ impl AdminService {
             .virtual_model
             .clone()
             .unwrap_or_else(|| current.virtual_model.clone());
-        let strategy = normalize_route_strategy(input.strategy.as_deref().or(Some(&current.strategy)))?;
+        let strategy =
+            normalize_route_strategy(input.strategy.as_deref().or(Some(&current.strategy)))?;
         let route_type = normalize_optional_route_type(input.route_type.as_deref())?;
         let effective_route_type = if let Some(value) = route_type.as_deref() {
             normalize_route_type(Some(value), "chat")?
@@ -634,8 +1213,7 @@ impl AdminService {
             )
         };
         ensure_virtual_model(&virtual_model)?;
-        self.ensure_route_unique(Some(id), &virtual_model)
-            .await?;
+        self.ensure_route_unique(Some(id), &virtual_model).await?;
 
         self.gw
             .storage
@@ -704,7 +1282,11 @@ impl AdminService {
             .await
     }
 
-    pub async fn update_api_key(&self, id: &str, input: UpdateApiKey) -> anyhow::Result<ApiKeyWithBindings> {
+    pub async fn update_api_key(
+        &self,
+        id: &str,
+        input: UpdateApiKey,
+    ) -> anyhow::Result<ApiKeyWithBindings> {
         let current = self
             .api_keys_store()?
             .get(id)
@@ -812,11 +1394,7 @@ impl AdminService {
             .ok_or_else(|| anyhow::anyhow!("invalid cache settings payload"))?;
         self.gw.reload_cache_runtime(parsed.clone()).await?;
         let raw = serde_json::to_string(&parsed.to_admin_json())?;
-        self.gw
-            .storage
-            .settings()
-            .set("cache_settings", &raw)
-            .await
+        self.gw.storage.settings().set("cache_settings", &raw).await
     }
 
     pub async fn flush_cache(&self) -> anyhow::Result<()> {
@@ -878,6 +1456,10 @@ impl AdminService {
                     capabilities_source: p.capabilities_source,
                     static_models: p.static_models,
                     api_key: p.api_key,
+                    auth_mode: p.auth_mode,
+                    access_token: p.access_token,
+                    refresh_token: p.refresh_token,
+                    expires_at: p.expires_at,
                     use_proxy: p.use_proxy,
                     is_enabled: p.is_enabled,
                 })
@@ -922,7 +1504,9 @@ impl AdminService {
                         } else {
                             Some(p.default_protocol.clone())
                         },
-                        protocol_endpoints: if p.protocol_endpoints.is_empty() || p.protocol_endpoints == "{}" {
+                        protocol_endpoints: if p.protocol_endpoints.is_empty()
+                            || p.protocol_endpoints == "{}"
+                        {
                             None
                         } else {
                             Some(p.protocol_endpoints.clone())
@@ -933,6 +1517,10 @@ impl AdminService {
                         capabilities_source: p.capabilities_source.clone(),
                         static_models: p.static_models.clone(),
                         api_key: p.api_key.clone(),
+                        auth_mode: p.auth_mode.clone(),
+                        access_token: p.access_token.clone(),
+                        refresh_token: p.refresh_token.clone(),
+                        expires_at: p.expires_at.clone(),
                         use_proxy: p.use_proxy,
                     })
                     .await
@@ -1062,7 +1650,11 @@ impl AdminService {
         exclude_id: Option<&str>,
         name: &str,
     ) -> anyhow::Result<()> {
-        if self.api_keys_store()?.exists_by_name(name, exclude_id).await? {
+        if self
+            .api_keys_store()?
+            .exists_by_name(name, exclude_id)
+            .await?
+        {
             return Err(coded_error(
                 "API_KEY_NAME_CONFLICT",
                 &format!("api key name already exists: {name}"),
@@ -1103,6 +1695,434 @@ impl AdminService {
             .context("selected storage backend does not support api key management")
     }
 
+    async fn create_auth_session_record(
+        &self,
+        input: auth::CreateAuthSession,
+    ) -> anyhow::Result<AuthSession> {
+        let now = now_rfc3339();
+        let session = AuthSession {
+            id: uuid::Uuid::new_v4().to_string(),
+            provider_id: input.provider_id,
+            driver_key: input.driver_key,
+            scheme: input.scheme,
+            status: input.status,
+            use_proxy: input.use_proxy,
+            user_code: input.user_code,
+            verification_uri: input.verification_uri,
+            verification_uri_complete: input.verification_uri_complete,
+            state_json: input.state_json,
+            context_json: input.context_json,
+            result_json: input.result_json,
+            expires_at: input.expires_at,
+            poll_interval_seconds: input.poll_interval_seconds,
+            last_error: input.last_error,
+            created_at: now.clone(),
+            updated_at: now,
+        };
+        let key = auth_session_setting_key(&session.id);
+        self.gw
+            .storage
+            .settings()
+            .set(&key, &serde_json::to_string(&session)?)
+            .await?;
+        Ok(session)
+    }
+
+    async fn get_auth_session_record(&self, id: &str) -> anyhow::Result<Option<AuthSession>> {
+        let key = auth_session_setting_key(id);
+        let Some(raw) = self.gw.storage.settings().get(&key).await? else {
+            return Ok(None);
+        };
+        if raw.trim().is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(serde_json::from_str(&raw).context("parse auth session")?))
+    }
+
+    async fn update_auth_session_record(
+        &self,
+        id: &str,
+        input: UpdateAuthSession,
+    ) -> anyhow::Result<AuthSession> {
+        let mut current = self
+            .get_auth_session_record(id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("auth session not found: {id}"))?;
+        if let Some(value) = input.status {
+            current.status = value;
+        }
+        if let Some(value) = input.user_code {
+            current.user_code = Some(value);
+        }
+        if let Some(value) = input.verification_uri {
+            current.verification_uri = Some(value);
+        }
+        if let Some(value) = input.verification_uri_complete {
+            current.verification_uri_complete = Some(value);
+        }
+        if let Some(value) = input.state_json {
+            current.state_json = Some(value);
+        }
+        if let Some(value) = input.context_json {
+            current.context_json = Some(value);
+        }
+        if let Some(value) = input.result_json {
+            current.result_json = Some(value);
+        }
+        if let Some(value) = input.expires_at {
+            current.expires_at = Some(value);
+        }
+        if let Some(value) = input.poll_interval_seconds {
+            current.poll_interval_seconds = Some(value);
+        }
+        if let Some(value) = input.last_error {
+            current.last_error = Some(value);
+        }
+        current.updated_at = now_rfc3339();
+
+        let key = auth_session_setting_key(id);
+        self.gw
+            .storage
+            .settings()
+            .set(&key, &serde_json::to_string(&current)?)
+            .await?;
+        Ok(current)
+    }
+
+    async fn delete_auth_session_record(&self, id: &str) -> anyhow::Result<()> {
+        let key = auth_session_setting_key(id);
+        self.gw.storage.settings().set(&key, "").await
+    }
+
+    async fn get_provider_auth_binding_record(
+        &self,
+        provider_id: &str,
+        driver_key: &str,
+    ) -> anyhow::Result<Option<auth::ProviderAuthBinding>> {
+        let key = provider_auth_binding_setting_key(provider_id, driver_key);
+        let Some(raw) = self.gw.storage.settings().get(&key).await? else {
+            return Ok(None);
+        };
+        if raw.trim().is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(
+            serde_json::from_str(&raw).context("parse provider auth binding")?,
+        ))
+    }
+
+    async fn upsert_provider_auth_binding_record(
+        &self,
+        input: UpsertProviderAuthBinding,
+    ) -> anyhow::Result<auth::ProviderAuthBinding> {
+        let existing = self
+            .get_provider_auth_binding_record(&input.provider_id, &input.driver_key)
+            .await?;
+        let now = now_rfc3339();
+        let binding = auth::ProviderAuthBinding {
+            id: existing
+                .as_ref()
+                .map(|value| value.id.clone())
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+            provider_id: input.provider_id.clone(),
+            driver_key: input.driver_key.clone(),
+            scheme: input.scheme,
+            status: input.status,
+            access_token: input.access_token,
+            refresh_token: input.refresh_token,
+            expires_at: input.expires_at,
+            resource_url: input.resource_url,
+            subject_id: input.subject_id,
+            scopes_json: input.scopes_json,
+            meta_json: input.meta_json,
+            last_error: input.last_error,
+            created_at: existing
+                .as_ref()
+                .map(|value| value.created_at.clone())
+                .unwrap_or_else(|| now.clone()),
+            updated_at: now,
+        };
+        let key = provider_auth_binding_setting_key(&input.provider_id, &input.driver_key);
+        self.gw
+            .storage
+            .settings()
+            .set(&key, &serde_json::to_string(&binding)?)
+            .await?;
+        Ok(binding)
+    }
+
+
+    pub(crate) async fn resolve_provider_runtime(
+        &self,
+        provider: &Provider,
+    ) -> anyhow::Result<ResolvedProviderRuntime> {
+        if provider.effective_auth_mode().trim() != "oauth" {
+            let api_key = provider.api_key.trim().to_string();
+            if api_key.is_empty() {
+                anyhow::bail!("provider api key is empty");
+            }
+            return Ok(ResolvedProviderRuntime {
+                access_token: api_key,
+                binding: RuntimeBinding::default(),
+            });
+        }
+
+        let fallback = provider.api_key.trim().to_string();
+        let driver_key = provider
+            .vendor
+            .as_deref()
+            .map(auth::normalize_driver_key)
+            .unwrap_or_default();
+        if driver_key.is_empty() {
+            if fallback.is_empty() {
+                anyhow::bail!("provider api key is empty");
+            }
+            return Ok(ResolvedProviderRuntime {
+                access_token: provider.api_key.clone(),
+                binding: RuntimeBinding::default(),
+            });
+        }
+
+        let Some(driver) = auth::build_driver(&driver_key) else {
+            if fallback.is_empty() {
+                anyhow::bail!("provider api key is empty");
+            }
+            return Ok(ResolvedProviderRuntime {
+                access_token: provider.api_key.clone(),
+                binding: RuntimeBinding::default(),
+            });
+        };
+
+        let Some(binding) = self
+            .get_provider_auth_binding_record(&provider.id, &driver_key)
+            .await?
+        else {
+            if fallback.is_empty() {
+                anyhow::bail!("provider api key is empty");
+            }
+            return Ok(ResolvedProviderRuntime {
+                access_token: provider.api_key.clone(),
+                binding: RuntimeBinding::default(),
+            });
+        };
+
+        let credential = binding.stored_credential();
+        let access_token = credential
+            .access_token
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+
+        if !access_token.is_empty() && !is_expired_at(credential.expires_at.as_deref()) {
+            return Ok(ResolvedProviderRuntime {
+                access_token,
+                binding: driver.bind_runtime(provider, &credential)?,
+            });
+        }
+
+        let refresh_token = credential
+            .refresh_token
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if refresh_token.is_empty() {
+            if !access_token.is_empty() {
+                return Ok(ResolvedProviderRuntime {
+                    access_token,
+                    binding: driver.bind_runtime(provider, &credential)?,
+                });
+            }
+            if fallback.is_empty() {
+                anyhow::bail!("provider credential is empty");
+            }
+            return Ok(ResolvedProviderRuntime {
+                access_token: provider.api_key.clone(),
+                binding: driver.bind_runtime(provider, &credential)?,
+            });
+        }
+
+        let client = self.gw.http_client_for_provider(provider.use_proxy).await?;
+        let bundle = match driver
+            .refresh(
+                &credential,
+                RefreshAuthContext {
+                    use_proxy: provider.use_proxy,
+                    http_client: Some(client),
+                    ..Default::default()
+                },
+            )
+            .await
+        {
+            Ok(bundle) => bundle,
+            Err(error) => {
+                self.upsert_provider_auth_binding_record(UpsertProviderAuthBinding {
+                    provider_id: provider.id.clone(),
+                    driver_key: binding.driver_key.clone(),
+                    scheme: binding.scheme.clone(),
+                    status: AuthBindingStatus::Error.as_str().to_string(),
+                    access_token: binding.access_token.clone(),
+                    refresh_token: binding.refresh_token.clone(),
+                    expires_at: binding.expires_at.clone(),
+                    resource_url: binding.resource_url.clone(),
+                    subject_id: binding.subject_id.clone(),
+                    scopes_json: binding.scopes_json.clone(),
+                    meta_json: binding.meta_json.clone(),
+                    last_error: Some(error.to_string()),
+                })
+                .await?;
+                if fallback.is_empty() {
+                    return Err(error.context("refresh oauth access token"));
+                }
+                return Ok(ResolvedProviderRuntime {
+                    access_token: provider.api_key.clone(),
+                    binding: driver.bind_runtime(provider, &credential)?,
+                });
+            }
+        };
+
+        let refreshed_binding = self
+            .upsert_provider_auth_binding_record(UpsertProviderAuthBinding {
+                provider_id: provider.id.clone(),
+                driver_key: binding.driver_key.clone(),
+                scheme: binding.scheme.clone(),
+                status: AuthBindingStatus::Connected.as_str().to_string(),
+                access_token: bundle.access_token.clone(),
+                refresh_token: bundle.refresh_token.clone(),
+                expires_at: bundle.expires_at.clone(),
+                resource_url: bundle.resource_url.clone(),
+                subject_id: bundle.subject_id.clone(),
+                scopes_json: Some(serde_json::to_string(&bundle.scopes)?),
+                meta_json: Some(serde_json::to_string(&bundle.raw)?),
+                last_error: None,
+            })
+            .await?;
+
+        let refreshed_credential = refreshed_binding.stored_credential();
+        self.sync_provider_runtime_fields(provider, &refreshed_credential)
+            .await?;
+
+        let access_token = refreshed_credential
+            .access_token
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| anyhow::anyhow!("provider credential refresh returned empty access token"))?;
+
+        Ok(ResolvedProviderRuntime {
+            access_token,
+            binding: driver.bind_runtime(provider, &refreshed_credential)?,
+        })
+    }
+
+    async fn persist_provider_auth_binding(
+        &self,
+        provider: &Provider,
+        session: &AuthSession,
+        bundle: &CredentialBundle,
+    ) -> anyhow::Result<auth::ProviderAuthBinding> {
+        self.upsert_provider_auth_binding_record(UpsertProviderAuthBinding {
+            provider_id: provider.id.clone(),
+            driver_key: session.driver_key.clone(),
+            scheme: session.scheme.clone(),
+            status: AuthBindingStatus::Connected.as_str().to_string(),
+            access_token: bundle.access_token.clone(),
+            refresh_token: bundle.refresh_token.clone(),
+            expires_at: bundle.expires_at.clone(),
+            resource_url: bundle.resource_url.clone(),
+            subject_id: bundle.subject_id.clone(),
+            scopes_json: Some(serde_json::to_string(&bundle.scopes)?),
+            meta_json: Some(serde_json::to_string(&bundle.raw)?),
+            last_error: None,
+        })
+        .await
+    }
+
+    async fn sync_provider_runtime_fields(
+        &self,
+        provider: &Provider,
+        credential: &StoredCredential,
+    ) -> anyhow::Result<Provider> {
+        let Some(driver) = auth::build_driver(&credential.driver_key) else {
+            return Ok(provider.clone());
+        };
+
+        let binding = driver.bind_runtime(provider, credential)?;
+        let base_url = binding
+            .base_url_override
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| provider.base_url.clone());
+        let models_source = binding
+            .models_source_override
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| provider.models_source.clone());
+        let capabilities_source = binding
+            .capabilities_source_override
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| provider.capabilities_source.clone());
+        let api_key = credential
+            .access_token
+            .clone()
+            .or_else(|| Some(provider.api_key.clone()))
+            .unwrap_or_default();
+        let protocol_endpoints = Some(sync_runtime_protocol_endpoints(provider, &base_url)?);
+
+        self.gw
+            .storage
+            .providers()
+            .update(
+                &provider.id,
+                UpdateProvider {
+                    base_url: Some(base_url),
+                    protocol_endpoints,
+                    models_source,
+                    capabilities_source,
+                    api_key: Some(api_key),
+                    auth_mode: Some("oauth".to_string()),
+                    access_token: credential.access_token.clone(),
+                    refresh_token: credential.refresh_token.clone(),
+                    expires_at: credential.expires_at.clone(),
+                    ..Default::default()
+                },
+            )
+            .await
+    }
+
+    pub async fn refresh_oauth_bindings(&self) -> anyhow::Result<usize> {
+        let providers = self.list_providers().await?;
+        let mut refreshed = 0usize;
+
+        for provider in providers {
+            if provider.effective_auth_mode().trim() != "oauth" {
+                continue;
+            }
+            let expires_soon = remaining_seconds_until(provider.expires_at.as_deref()) <= 300;
+            let has_refresh = provider
+                .refresh_token
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|value| !value.is_empty());
+            if !expires_soon || !has_refresh {
+                continue;
+            }
+
+            match self.resolve_provider_runtime(&provider).await {
+                Ok(_) => refreshed += 1,
+                Err(error) => tracing::warn!(
+                    "background oauth refresh failed for provider {} ({}): {}",
+                    provider.id,
+                    provider.name,
+                    error
+                ),
+            }
+        }
+
+        Ok(refreshed)
+    }
+
     async fn ensure_embedding_route_targets_openai(
         &self,
         targets: &[CreateRouteTarget],
@@ -1126,6 +2146,142 @@ impl AdminService {
     }
 }
 
+fn parse_auth_session_bundle(session: &AuthSession) -> anyhow::Result<CredentialBundle> {
+    let raw = session
+        .result_json
+        .as_deref()
+        .context("auth session is missing result_json")?;
+    serde_json::from_str(raw).context("parse auth session credential bundle")
+}
+
+fn build_provider_oauth_status(
+    provider: &Provider,
+    driver_key: &str,
+    binding: Option<&auth::ProviderAuthBinding>,
+    fallback_error: Option<String>,
+) -> ProviderOAuthStatusData {
+    let status = binding
+        .map(|value| value.status.clone())
+        .unwrap_or_else(|| AuthBindingStatus::Disconnected.as_str().to_string());
+    let has_refresh_token = binding
+        .and_then(|value| value.refresh_token.as_deref())
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty());
+
+    ProviderOAuthStatusData {
+        provider_id: provider.id.clone(),
+        provider_name: provider.name.clone(),
+        driver_key: driver_key.to_string(),
+        status,
+        expires_at: binding.and_then(|value| value.expires_at.clone()),
+        resource_url: binding.and_then(|value| value.resource_url.clone()),
+        subject_id: binding.and_then(|value| value.subject_id.clone()),
+        last_error: binding
+            .and_then(|value| value.last_error.clone())
+            .filter(|value| !value.trim().is_empty())
+            .or(fallback_error),
+        updated_at: binding.map(|value| value.updated_at.clone()),
+        has_refresh_token,
+    }
+}
+
+fn build_auth_session_init_data(session: &AuthSession) -> anyhow::Result<AuthSessionInitData> {
+    Ok(AuthSessionInitData {
+        session_id: session.id.clone(),
+        vendor: session.driver_key.clone(),
+        scheme: session.scheme.clone(),
+        auth_url: session
+            .verification_uri_complete
+            .clone()
+            .unwrap_or_default(),
+        requires_manual_code: session.scheme == AuthScheme::OAuthAuthCodePkce.as_str()
+            || session.scheme == AuthScheme::SetupToken.as_str(),
+        user_code: session.user_code.clone().unwrap_or_default(),
+        verification_uri: session.verification_uri.clone().unwrap_or_default(),
+        verification_uri_complete: session
+            .verification_uri_complete
+            .clone()
+            .unwrap_or_default(),
+        expires_in: remaining_seconds_until(session.expires_at.as_deref()),
+        interval: session.poll_interval_seconds.unwrap_or(2),
+    })
+}
+
+fn build_auth_session_pending_data(session: &AuthSession) -> AuthSessionStatusData {
+    AuthSessionStatusData::Pending {
+        scheme: session.scheme.clone(),
+        auth_url: session
+            .verification_uri_complete
+            .clone()
+            .unwrap_or_default(),
+        requires_manual_code: session.scheme == AuthScheme::OAuthAuthCodePkce.as_str()
+            || session.scheme == AuthScheme::SetupToken.as_str(),
+        expires_in: remaining_seconds_until(session.expires_at.as_deref()),
+        interval: session.poll_interval_seconds.unwrap_or(2),
+        user_code: session.user_code.clone().unwrap_or_default(),
+        verification_uri_complete: session
+            .verification_uri_complete
+            .clone()
+            .unwrap_or_default(),
+    }
+}
+
+fn build_auth_session_ready_data(
+    session: &AuthSession,
+    bundle: &CredentialBundle,
+) -> AuthSessionStatusData {
+    AuthSessionStatusData::Ready {
+        expires_in: remaining_seconds_until(
+            bundle
+                .expires_at
+                .as_deref()
+                .or(session.expires_at.as_deref()),
+        ),
+        resource_url: bundle.resource_url.clone(),
+    }
+}
+
+fn remaining_seconds_until(expires_at: Option<&str>) -> i64 {
+    expires_at
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(parse_datetime_utc)
+        .map(|value| (value - Utc::now()).num_seconds().max(0))
+        .unwrap_or(0)
+}
+
+fn is_expired_at(expires_at: Option<&str>) -> bool {
+    expires_at
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(parse_datetime_utc)
+        .map(|value| value <= Utc::now())
+        .unwrap_or(false)
+}
+
+fn parse_datetime_utc(value: &str) -> Option<DateTime<Utc>> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .map(|value| value.with_timezone(&Utc))
+        .ok()
+        .or_else(|| {
+            chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S")
+                .ok()
+                .map(|value| DateTime::<Utc>::from_naive_utc_and_offset(value, Utc))
+        })
+}
+
+fn now_rfc3339() -> String {
+    Utc::now().to_rfc3339()
+}
+
+fn auth_session_setting_key(id: &str) -> String {
+    format!("oauth.session.{id}")
+}
+
+fn provider_auth_binding_setting_key(provider_id: &str, driver_key: &str) -> String {
+    format!("oauth.binding.{provider_id}.{driver_key}")
+}
+
 fn flatten_route_cache_columns(
     cache: Option<&RouteCacheConfig>,
 ) -> (Option<i64>, Option<i64>, Option<f64>) {
@@ -1133,8 +2289,14 @@ fn flatten_route_cache_columns(
         return (None, None, None);
     };
     let exact_ttl = cache.exact.as_ref().map(|exact| exact.ttl.unwrap_or(0));
-    let semantic_ttl = cache.semantic.as_ref().map(|semantic| semantic.ttl.unwrap_or(0));
-    let semantic_threshold = cache.semantic.as_ref().and_then(|semantic| semantic.threshold);
+    let semantic_ttl = cache
+        .semantic
+        .as_ref()
+        .map(|semantic| semantic.ttl.unwrap_or(0));
+    let semantic_threshold = cache
+        .semantic
+        .as_ref()
+        .and_then(|semantic| semantic.threshold);
     (exact_ttl, semantic_ttl, semantic_threshold)
 }
 
@@ -1145,10 +2307,12 @@ fn resolve_route_cache(route: &Route) -> Option<RouteCacheConfig> {
     let exact = route.cache_exact_ttl.map(|ttl| RouteExactCacheConfig {
         ttl: if ttl > 0 { Some(ttl) } else { None },
     });
-    let semantic = route.cache_semantic_ttl.map(|ttl| RouteSemanticCacheConfig {
-        ttl: if ttl > 0 { Some(ttl) } else { None },
-        threshold: route.cache_semantic_threshold,
-    });
+    let semantic = route
+        .cache_semantic_ttl
+        .map(|ttl| RouteSemanticCacheConfig {
+            ttl: if ttl > 0 { Some(ttl) } else { None },
+            threshold: route.cache_semantic_threshold,
+        });
     if exact.is_none() && semantic.is_none() {
         None
     } else {
@@ -1192,10 +2356,7 @@ fn ensure_virtual_model(model: &str) -> anyhow::Result<()> {
 }
 
 fn normalize_route_strategy(strategy: Option<&str>) -> anyhow::Result<String> {
-    let normalized = strategy
-        .unwrap_or("weighted")
-        .trim()
-        .to_ascii_lowercase();
+    let normalized = strategy.unwrap_or("weighted").trim().to_ascii_lowercase();
     match normalized.as_str() {
         "weighted" | "priority" => Ok(normalized),
         _ => anyhow::bail!("unsupported route strategy: {normalized}"),
@@ -1235,7 +2396,10 @@ fn normalize_create_route_targets(input: &CreateRoute) -> anyhow::Result<Vec<Cre
     anyhow::bail!("at least one route target is required")
 }
 
-fn normalize_update_route_targets(current: &Route, input: &UpdateRoute) -> anyhow::Result<Vec<CreateRouteTarget>> {
+fn normalize_update_route_targets(
+    current: &Route,
+    input: &UpdateRoute,
+) -> anyhow::Result<Vec<CreateRouteTarget>> {
     if let Some(targets) = &input.targets {
         let mapped = targets
             .iter()
@@ -1352,6 +2516,72 @@ fn resolve_openai_base_url(provider: &Provider) -> Option<String> {
     Some(trimmed.to_string())
 }
 
+fn resolve_provider_credential(provider: &Provider) -> anyhow::Result<String> {
+    let effective_auth_mode = provider.effective_auth_mode();
+    let auth_mode = effective_auth_mode.trim();
+    let credential = match auth_mode {
+        "api_key" | "" => provider.api_key.trim(),
+        "oauth" => provider
+            .access_token
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or(""),
+        other => anyhow::bail!("unsupported provider auth_mode: {other}"),
+    };
+
+    if credential.is_empty() {
+        let source = if auth_mode == "oauth" {
+            "access_token"
+        } else {
+            "api_key"
+        };
+        anyhow::bail!(
+            "provider credential is empty for auth_mode={} ({source})",
+            if auth_mode.is_empty() {
+                "api_key"
+            } else {
+                auth_mode
+            }
+        );
+    }
+
+    Ok(credential.to_string())
+}
+
+fn sync_runtime_protocol_endpoints(provider: &Provider, base_url: &str) -> anyhow::Result<String> {
+    let mut endpoints = provider.parsed_protocol_endpoints();
+    let runtime_base_url = base_url.trim();
+
+    if runtime_base_url.is_empty() {
+        return Ok(serde_json::to_string(&endpoints)?);
+    }
+
+    for protocol in [provider.protocol.trim(), provider.effective_default_protocol().trim()] {
+        if protocol.is_empty() {
+            continue;
+        }
+        endpoints
+            .entry(protocol.to_string())
+            .and_modify(|entry| entry.base_url = runtime_base_url.to_string())
+            .or_insert_with(|| ProtocolEndpointEntry {
+                base_url: runtime_base_url.to_string(),
+            });
+    }
+
+    Ok(serde_json::to_string(&endpoints)?)
+}
+
+fn runtime_binding_headers(binding: &RuntimeBinding) -> anyhow::Result<HeaderMap> {
+    let mut headers = HeaderMap::new();
+    for (key, value) in &binding.extra_headers {
+        headers.insert(
+            reqwest::header::HeaderName::from_bytes(key.as_bytes())?,
+            HeaderValue::from_str(value)?,
+        );
+    }
+    Ok(headers)
+}
+
 fn build_model_headers(
     protocol: &str,
     vendor: Option<&str>,
@@ -1386,7 +2616,7 @@ fn build_model_headers(
     Ok(headers)
 }
 
-fn extract_models_from_response(protocol: &str, vendor: Option<&str>, json: &Value) -> Vec<String> {
+fn extract_models_from_response(_protocol: &str, vendor: Option<&str>, json: &Value) -> Vec<String> {
     let is_google_vendor = vendor
         .map(str::trim)
         .is_some_and(|value| value.eq_ignore_ascii_case("google"));
@@ -1405,17 +2635,25 @@ fn extract_models_from_response(protocol: &str, vendor: Option<&str>, json: &Val
         })
         .collect::<Vec<_>>();
 
-    if models.is_empty() && protocol == "gemini" {
+    if models.is_empty() {
         models = json
             .get("models")
             .and_then(|value| value.as_array())
             .into_iter()
             .flatten()
-            .filter_map(|item| item.get("name").and_then(|value| value.as_str()))
+            .filter_map(|item| {
+                item.get("name")
+                    .and_then(|value| value.as_str())
+                    .or_else(|| item.get("slug").and_then(|value| value.as_str()))
+                    .or_else(|| item.get("id").and_then(|value| value.as_str()))
+            })
             .map(|name| {
                 let normalized = name.rsplit('/').next().unwrap_or(name);
                 if is_google_vendor {
-                    normalized.strip_prefix("models/").unwrap_or(normalized).to_string()
+                    normalized
+                        .strip_prefix("models/")
+                        .unwrap_or(normalized)
+                        .to_string()
                 } else {
                     normalized.to_string()
                 }
@@ -1513,16 +2751,27 @@ fn extract_ollama_context_window(model_info: &serde_json::Map<String, Value>) ->
 }
 
 fn extract_ollama_embedding_length(model_info: &serde_json::Map<String, Value>) -> Option<u64> {
-    if let Some(arch) = model_info.get("general.architecture").and_then(Value::as_str) {
+    if let Some(arch) = model_info
+        .get("general.architecture")
+        .and_then(Value::as_str)
+    {
         let key = format!("{arch}.embedding_length");
-        if let Some(value) = model_info.get(&key).and_then(Value::as_u64).filter(|value| *value > 0) {
+        if let Some(value) = model_info
+            .get(&key)
+            .and_then(Value::as_u64)
+            .filter(|value| *value > 0)
+        {
             return Some(value);
         }
     }
     model_info
         .get("embedding_length")
         .and_then(Value::as_u64)
-        .or_else(|| model_info.get("general.embedding_length").and_then(Value::as_u64))
+        .or_else(|| {
+            model_info
+                .get("general.embedding_length")
+                .and_then(Value::as_u64)
+        })
         .filter(|value| *value > 0)
 }
 
@@ -1540,7 +2789,9 @@ pub async fn refresh_models_dev_runtime_cache_on_startup(
     http_client: reqwest::Client,
 ) {
     if let Err(err) = refresh_models_dev_runtime_cache_inner(&data_dir, &http_client, true).await {
-        tracing::warn!("models.dev startup refresh failed, fallback to local cache/snapshot: {err}");
+        tracing::warn!(
+            "models.dev startup refresh failed, fallback to local cache/snapshot: {err}"
+        );
     }
 }
 
@@ -1597,7 +2848,45 @@ fn parse_provider_presets_snapshot() -> anyhow::Result<Vec<Value>> {
     let Some(items) = parsed.as_array() else {
         anyhow::bail!("invalid providers preset snapshot: root must be array");
     };
-    Ok(items.clone())
+    Ok(items
+        .iter()
+        .cloned()
+        .map(|mut item| {
+            if let Some(obj) = item.as_object_mut() {
+                if let Some(channels) = obj.get_mut("channels").and_then(Value::as_array_mut) {
+                    for channel in channels {
+                        if let Some(channel_obj) = channel.as_object_mut() {
+                            channel_obj
+                                .entry("auth_mode".to_string())
+                                .or_insert_with(|| Value::String(default_provider_auth_mode()));
+                        }
+                    }
+                }
+            }
+            item
+        })
+        .collect())
+}
+
+fn resolve_preset_channel_auth_mode(preset_key: Option<&str>, channel_id: Option<&str>) -> Option<String> {
+    let preset_key = preset_key?.trim();
+    if preset_key.is_empty() {
+        return None;
+    }
+    let requested_channel = channel_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("default");
+    let presets = serde_json::from_str::<Vec<ProviderPresetSnapshot>>(PROVIDER_PRESETS_SNAPSHOT).ok()?;
+    let preset = presets.into_iter().find(|item| item.id == preset_key)?;
+    let default_channel = preset.channels.iter().find(|item| item.id == "default").map(|item| item.auth_mode.clone());
+    let channel = preset
+        .channels
+        .into_iter()
+        .find(|item| item.id == requested_channel)
+        .map(|item| item.auth_mode)
+        .or(default_channel)?;
+    Some(channel)
 }
 
 fn parse_models_dev_data(data_dir: &Path) -> anyhow::Result<HashMap<String, ModelsDevVendor>> {
@@ -1674,7 +2963,10 @@ fn match_models_dev_capability(
                 if model_id.to_lowercase().contains(&needle) {
                     let cap = to_models_dev_capability(vk, entry);
                     let len = model_id.len();
-                    let replace = best.as_ref().map(|(prev_len, _)| len < *prev_len).unwrap_or(true);
+                    let replace = best
+                        .as_ref()
+                        .map(|(prev_len, _)| len < *prev_len)
+                        .unwrap_or(true);
                     if replace {
                         best = Some((len, cap));
                     }
@@ -1695,7 +2987,10 @@ fn match_models_dev_capability(
         if model_id.to_lowercase().contains(&needle) {
             let cap = to_models_dev_capability(vendor_key, entry);
             let len = model_id.len();
-            let replace = best.as_ref().map(|(prev_len, _)| len < *prev_len).unwrap_or(true);
+            let replace = best
+                .as_ref()
+                .map(|(prev_len, _)| len < *prev_len)
+                .unwrap_or(true);
             if replace {
                 best = Some((len, cap));
             }
@@ -1764,7 +3059,9 @@ fn parse_http_capability(json: &Value, model: &str) -> Option<ModelCapabilities>
         .and_then(Value::as_object)
         .and_then(|obj| obj.get("completion"))
         .and_then(parse_maybe_price_per_token);
-    let tool_call = supported_parameters.iter().any(|v| v.as_str() == Some("tools"));
+    let tool_call = supported_parameters
+        .iter()
+        .any(|v| v.as_str() == Some("tools"));
     let model_lower = model_id.to_lowercase();
     let reasoning = model_lower.contains("reason")
         || model_lower.contains("thinking")
